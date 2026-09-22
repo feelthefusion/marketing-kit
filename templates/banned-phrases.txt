@@ -1,0 +1,43 @@
+# Kit-wide AI-slop phrases (mkt-preflight warns on each). One per line, case-insensitive.
+# Add project-specific ones to <repo>/.agents/banned-phrases.txt — never edit this copy.
+unlock
+unleash
+elevate
+supercharge
+game-changer
+game changer
+revolutionize
+seamless
+seamlessly
+cutting-edge
+next-level
+take it to the next level
+dive into
+delve
+in today's fast-paced
+in today's digital
+look no further
+we're excited to announce
+we are thrilled
+thrilled to
+embark
+journey
+empower
+harness the power
+transform your
+world-class
+best-in-class
+robust
+leverage
+synergy
+don't miss out
+act now
+limited time only
+just checking in
+hope this finds you well
+i hope this email finds you
+as an ai
+tailored to your needs
+whether you're
+it's not just
+more than just

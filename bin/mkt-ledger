@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+# =============================================================================
+# Marketing Kit — Playbook Ledger CLI (Supermemory, local server)
+#
+#   mkt-ledger save  <kind> "<text>"      kind: icp|persona|campaign|lift|voice|offer|
+#                                              seasonal|channel|insight|decision
+#   mkt-ledger recall "<query>" [limit]   hybrid search over the growth ledger
+#   mkt-ledger doctor                     server reachable + key valid
+#
+# Writes to container "growth" with metadata {kind, project}; the project defaults
+# to the git repo name (override MKT_PROJECT). Both hosts use this same CLI so a
+# result saved from Claude Code is recalled from Hermes and vice versa.
+# =============================================================================
+set -euo pipefail
+URL="${SUPERMEMORY_API_URL:-http://localhost:6767}"
+KEY_FILE="$HOME/.supermemory/api-key"
+CONTAINER="${MKT_LEDGER_CONTAINER:-growth}"
+KEY="${SUPERMEMORY_API_KEY:-$( [ -s "$KEY_FILE" ] && cat "$KEY_FILE" || true)}"
+[ -n "$KEY" ] || { echo "mkt-ledger: no Supermemory key ($KEY_FILE) — run the kit installer" >&2; exit 1; }
+PROJECT="${MKT_PROJECT:-$(basename "$(git rev-parse --show-toplevel 2>/dev/null || pwd)")}"
+
+post() { curl -sS --max-time 20 -X POST "$URL$1" -H "Authorization: Bearer $KEY" -H 'content-type: application/json' -d "$2"; }
+
+cmd="${1:-}"; shift || true
+case "$cmd" in
+    save)
+        kind="${1:?kind required}"; text="${2:?text required}"
+        case "$kind" in icp|persona|campaign|lift|voice|offer|seasonal|channel|insight|decision) ;;
+            *) echo "mkt-ledger: unknown kind '$kind'" >&2; exit 2 ;; esac
+        body="$(python3 -c 'import json,sys,datetime; k,p,t,c=sys.argv[1:5]; print(json.dumps({"content": f"[growth:{k}] [{p}] {t}", "containerTag": c, "metadata": {"kind": k, "project": p, "saved": datetime.date.today().isoformat(), "source": "marketing-kit"}}))' "$kind" "$PROJECT" "$text" "$CONTAINER")"
+        post /v3/documents "$body" | python3 -c 'import json,sys; d=json.load(sys.stdin); print("saved", d.get("id"), d.get("status",""))'
+        ;;
+    recall)
+        q="${1:?query required}"; lim="${2:-8}"
+        body="$(python3 -c 'import json,sys; print(json.dumps({"q": sys.argv[1], "containerTag": sys.argv[2], "limit": int(sys.argv[3]), "searchMode": "hybrid"}))' "$q" "$CONTAINER" "$lim")"
+        post /v4/search "$body" | python3 -c '
+import json, sys
+d = json.load(sys.stdin); rs = d.get("results", [])
+if not rs: print("(no ledger entries match)"); sys.exit(0)
+for r in rs:
+    m = r.get("metadata") or {}
+    txt = (r.get("memory") or r.get("chunk") or "").strip()
+    tag = "|".join([m.get("kind", "?"), m.get("project", "?"), m.get("saved", "")])
+    print("- [%s] %s  (%.2f)" % (tag, txt, r.get("similarity", 0)))'
+        ;;
+    doctor)
+        code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 -X POST "$URL/v4/search" -H "Authorization: Bearer $KEY" -H 'content-type: application/json' -d '{"q":"ping","limit":1}' || true)"
+        [ "$code" = 200 ] && echo "ledger ok ($URL, container=$CONTAINER, project=$PROJECT)" || { echo "ledger unreachable/unauthorized (HTTP $code at $URL)"; exit 1; }
+        ;;
+    *) sed -n '2,13p' "$0" | sed 's/^# \{0,1\}//'; [ -z "$cmd" ] || exit 2 ;;
+esac

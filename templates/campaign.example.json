@@ -1,0 +1,61 @@
+{
+  "id": "winback-10d-inactive",
+  "goal": "reactivation",
+  "hypothesis": "Customers on a paid plan who have not logged in for 10+ days come back when reminded of the specific report they used most, not a generic 'we miss you'.",
+  "persona": "Busy operator (see .agents/product-marketing.md § Personas)",
+  "audience": {
+    "sql": "winback-10d-inactive.sql",
+    "columns": [
+      "contact_id",
+      "email",
+      "phone_e164",
+      "first_name",
+      "top_feature",
+      "plan"
+    ],
+    "estimated_size": 412
+  },
+  "required_columns": [
+    "email",
+    "top_feature"
+  ],
+  "var_max_length": {
+    "first_name": 14,
+    "top_feature": 22
+  },
+  "holdout_pct": 10,
+  "primary_metric": {
+    "name": "reactivated_7d",
+    "source": "posthog",
+    "definition": "contact fires `session_started` within 7 days of first message",
+    "window_days": 7
+  },
+  "guardrail_metrics": [
+    "unsubscribe_rate",
+    "sms_opt_out_rate",
+    "spam_complaint_rate"
+  ],
+  "send": {
+    "mode": "triggered",
+    "trigger": "cohort: inactive_10d (evaluated daily 15:00 local)",
+    "idempotency_key": "{{campaign.id}}/{{contact_id}}",
+    "quiet_hours": "21:00-09:00 recipient local"
+  },
+  "channels": [
+    {
+      "type": "email",
+      "from": "Sam at Acme <sam@mail.acme.com>",
+      "subject": "Your {{top_feature}} numbers moved",
+      "preheader": "3 changes since you last looked",
+      "body_text": "Hi {{first_name | there}},\n\nYour {{top_feature}} picked up 3 changes since you last checked. Open it: https://app.acme.com/r?utm_source=resend&utm_medium=email&utm_campaign=winback-10d-inactive\n\nManage preferences: {{link.unsubscribe}}"
+    },
+    {
+      "type": "sms",
+      "from": "+15555550123",
+      "delay_hours": 48,
+      "only_if": "email not opened",
+      "body": "Acme: {{first_name | Hi}}, 3 changes in {{top_feature}} since your last visit. https://acme.com/r?utm_source=telnyx&utm_medium=sms&utm_campaign=winback-10d-inactive",
+      "max_segments": 2
+    }
+  ]
+}

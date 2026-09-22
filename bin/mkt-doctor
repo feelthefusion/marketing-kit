@@ -1,0 +1,67 @@
+#!/usr/bin/env bash
+# =============================================================================
+# Marketing Kit — doctor.   mkt-doctor [--live]
+# What is wired on this machine and in the current repo, with the exact fix for each gap.
+# --live additionally starts each MCP server briefly to prove it launches (needs network).
+# =============================================================================
+set -uo pipefail
+SELF="${BASH_SOURCE[0]}"; while [ -L "$SELF" ]; do SELF="$(readlink "$SELF")"; done
+KIT_ROOT="$(cd "$(dirname "$SELF")/.." && pwd)"
+SECRETS="$HOME/.config/marketing-kit/secrets.env"
+G=0; Y=0
+pass() { printf '  ✓ %s\n' "$*"; G=$((G+1)); }
+gap()  { printf '  ✗ %s\n      fix: %s\n' "$1" "$2"; Y=$((Y+1)); }
+has()  { [ -f "$SECRETS" ] && grep -qE "^$1=.+" "$SECRETS"; }
+
+echo "── Marketing Kit doctor ($(git -C "$KIT_ROOT" rev-parse --short HEAD 2>/dev/null || echo '?'))"
+echo "▶ machine"
+for t in node uvx railway psql; do command -v $t >/dev/null 2>&1 && pass "$t" || gap "$t missing" "re-run the kit installer (psql: brew install libpq)"; done
+for b in mkt-mcp mkt-ledger mkt-preflight mkt-init; do command -v $b >/dev/null 2>&1 && pass "$b on PATH" || gap "$b not on PATH" "export PATH=\"\$HOME/.local/bin:\$PATH\""; done
+[ -f "$SECRETS" ] && [ "$(stat -f %Lp "$SECRETS" 2>/dev/null || stat -c %a "$SECRETS")" = 600 ] && pass "secrets.env (600)" || gap "secrets.env missing or not 600" "re-run installer; chmod 600 $SECRETS"
+has TELNYX_API_KEY && pass "TELNYX_API_KEY" || gap "TELNYX_API_KEY empty" "add it to $SECRETS, re-run installer"
+has RESEND_API_KEY && pass "RESEND_API_KEY" || echo "  · RESEND_API_KEY empty (fine on Claude Code — plugin uses OAuth; needed for Hermes)"
+{ has GOOGLE_APPLICATION_CREDENTIALS || [ -f "$HOME/.config/gcloud/application_default_credentials.json" ]; } && pass "Google credentials (GA4 + GSC)" \
+    || gap "no Google credentials" "service-account JSON path → GOOGLE_APPLICATION_CREDENTIALS in $SECRETS"
+"$KIT_ROOT/bin/mkt-ledger" doctor >/dev/null 2>&1 && pass "Supermemory ledger reachable" || gap "Supermemory ledger unreachable" "launchctl kickstart -k gui/\$(id -u)/com.supermemory.local  (or run supermemory-server)"
+
+echo "▶ hosts"
+if [ -d "$HOME/.claude" ]; then
+    for s in marketing-kit growth-data journey-analytics campaign-harden lifecycle-engine playbook-ledger; do
+        [ -L "$HOME/.claude/skills/$s" ] && [ -f "$HOME/.claude/skills/$s/SKILL.md" ] || { gap "Claude Code skill $s not linked" "bash $KIT_ROOT/install/install.sh"; continue; }
+    done; [ -L "$HOME/.claude/skills/marketing-kit" ] && pass "Claude Code kit skills linked (live)"
+    if command -v claude >/dev/null 2>&1; then
+        PL="$(claude plugin list 2>/dev/null)"
+        while IFS=$'\t' read -r p _ sc _; do case "$p" in ''|\#*) continue;; esac; [ "$sc" = user ] || continue
+            grep -q "❯ $p\$" <<<"$PL" && pass "plugin $p (user)" || gap "plugin $p missing" "claude plugin install $p --scope user"; done < "$KIT_ROOT/install/claude-plugins.tsv"
+    fi
+fi
+if command -v hermes >/dev/null 2>&1; then
+    [ -L "${HERMES_HOME:-$HOME/.hermes}/skills/marketing/marketing-kit" ] && pass "Hermes kit skills linked (live)" || gap "Hermes kit skills not linked" "bash $KIT_ROOT/install/hermes.sh"
+    [ "$(hermes config get memory.provider 2>/dev/null)" = supermemory ] && pass "Hermes memory.provider = supermemory" || gap "Hermes memory provider not supermemory" "hermes config set memory.provider supermemory"
+fi
+
+echo "▶ repo ($(basename "$(git rev-parse --show-toplevel 2>/dev/null || pwd)"))"
+if git rev-parse --show-toplevel >/dev/null 2>&1; then
+    R="$(git rev-parse --show-toplevel)"
+    [ -f "$R/.agents/growth-stack.md" ] && pass "growth-stack.md" || gap "no .agents/growth-stack.md" "mkt-init"
+    if [ -d "$HOME/.claude" ]; then while IFS=$'\t' read -r p _ sc _; do [ "$sc" = project ] || continue
+        grep -q "\"$p\": *true" "$R/.claude/settings.json" 2>/dev/null && pass "plugin $p (this repo)" || gap "plugin $p not enabled here" "mkt-init"
+    done < "$KIT_ROOT/install/claude-plugins.tsv"; fi
+    [ -f "$R/.agents/product-marketing.md" ] && pass "product-marketing.md" || gap "no .agents/product-marketing.md" "ask the agent: \"set up product marketing context\""
+    if grep -q '?' "$R/.agents/growth-stack.md" 2>/dev/null; then echo "  · growth-stack.md still has $(grep -c '?' "$R/.agents/growth-stack.md") '?' line(s) to fill"; fi
+    if DBSRC="$("$KIT_ROOT/bin/mkt-mcp" db-resolve "$R" 2>/dev/null)"; then pass "CRM DB resolvable ($DBSRC)"
+    else gap "no CRM database for this repo" "CRM_DATABASE_URL in .agents/marketing-kit.env, or: railway link"; fi
+    ls "$R"/campaigns/*.campaign.json >/dev/null 2>&1 && { "$KIT_ROOT/bin/mkt-preflight" "$R"/campaigns/*.campaign.json >/dev/null && pass "campaigns preflight GREEN" || gap "campaigns preflight RED" "mkt-preflight campaigns/*.campaign.json"; }
+else echo "  · not in a git repo — repo checks skipped"; fi
+
+if [ "${1:-}" = --live ]; then
+    echo "▶ live MCP launch (5s each; initialize handshake)"
+    INIT='{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"mkt-doctor","version":"1"}}}'
+    for s in db telnyx resend ga4 gsc railway; do
+        out="$( (printf '%s\n' "$INIT"; sleep 12) | "$KIT_ROOT/bin/mkt-mcp" $s 2>/tmp/mkt-live.$$ | head -c 400 & p=$!; ( sleep 25; kill $p 2>/dev/null ) & wait $p 2>/dev/null)"
+        if grep -q '"result"' <<<"$out"; then pass "mkt-mcp $s initialize OK"
+        else printf '  ✗ mkt-mcp %s: %s\n' "$s" "$(grep -v '^ *$' /tmp/mkt-live.$$ | tail -1 | cut -c1-140)"; Y=$((Y+1)); fi
+    done; rm -f /tmp/mkt-live.$$
+fi
+echo "── $G ok · $Y to fix"
+[ "$Y" = 0 ]

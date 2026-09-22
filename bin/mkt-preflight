@@ -1,0 +1,213 @@
+#!/usr/bin/env node
+// =============================================================================
+// Marketing Kit — campaign preflight (schema + copy-integrity gate)
+//
+//   mkt-preflight campaigns/*.campaign.json [--db] [--json] [--strict]
+//
+// Deterministic checks a model forgets. Exit 1 on any ERROR (and on WARN with --strict).
+//   schema     required fields, enums, one primary metric, holdout declared
+//   variables  every {{var}} in subject/preheader/body resolves to an audience column
+//   --db       runs the audience SQL with LIMIT 0 against the project CRM DB (psql) and
+//              checks the declared columns are the REAL ones
+//   sms        GSM-7 vs UCS-2, segment count with vars at max length, cost multiplier
+//   email      subject/preheader length, from address, unsubscribe/footer link present
+//   links      utm_source/utm_medium/utm_campaign on every link; utm_campaign == campaign id
+//              (the join key GA4, PostHog and the messages table share)
+//   slop       banned AI-cliché phrases (kit list + project .agents/banned-phrases.txt)
+//   leftovers  TODO / lorem / [NAME] / unresolved {{…}} / {{ var }} with no fallback
+// Zero dependencies; Node 18+.
+// =============================================================================
+import fs from "node:fs";
+import path from "node:path";
+import { execFileSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
+
+const KIT = path.resolve(path.dirname(fs.realpathSync(fileURLToPath(import.meta.url))), "..");
+const args = process.argv.slice(2);
+const flags = new Set(args.filter((a) => a.startsWith("--")));
+const files = args.filter((a) => !a.startsWith("--"));
+if (!files.length || flags.has("--help")) {
+  console.log("usage: mkt-preflight <campaign.json>... [--db] [--json] [--strict]");
+  process.exit(files.length ? 0 : 2);
+}
+
+const GOALS = ["acquisition", "activation", "upsell", "retention", "reactivation", "referral", "transactional"];
+const MODES = ["one-off", "scheduled", "triggered"];
+const METRIC_SOURCES = ["db", "posthog", "stripe", "ga4", "resend", "telnyx"];
+const GSM7 =
+  "@£$¥èéùìòÇ\nØø\rÅåΔ_ΦΓΛΩΠΨΣΘΞÆæßÉ !\"#¤%&'()*+,-./0123456789:;<=>?¡ABCDEFGHIJKLMNOPQRSTUVWXYZÄÖÑÜ§¿abcdefghijklmnopqrstuvwxyzäöñüà";
+const GSM7_EXT = "^{}\\[~]|€"; // cost 2 septets each
+
+function loadList(p) {
+  try {
+    return fs.readFileSync(p, "utf8").split("\n").map((l) => l.trim()).filter((l) => l && !l.startsWith("#"));
+  } catch { return []; }
+}
+
+function findProjectRoot(start) {
+  let d = path.resolve(start);
+  while (d !== path.dirname(d)) {
+    if (fs.existsSync(path.join(d, ".git")) || fs.existsSync(path.join(d, ".agents"))) return d;
+    d = path.dirname(d);
+  }
+  return process.cwd();
+}
+
+const VAR_RE = /\{\{\s*([\w.]+)\s*(?:\|\s*([^}]*))?\}\}/g;
+function varsIn(text) {
+  const out = [];
+  for (const m of String(text || "").matchAll(VAR_RE)) out.push({ name: m[1], fallback: m[2]?.trim() });
+  return out;
+}
+
+function smsStats(text) {
+  let ucs = false, septets = 0;
+  const offenders = new Set();
+  for (const ch of text) {
+    if (GSM7.includes(ch)) septets += 1;
+    else if (GSM7_EXT.includes(ch)) septets += 2;
+    else { ucs = true; offenders.add(ch); }
+  }
+  const units = ucs ? [...text].reduce((n, c) => n + (c.codePointAt(0) > 0xffff ? 2 : 1), 0) : septets;
+  const single = ucs ? 70 : 160, multi = ucs ? 67 : 153;
+  const segments = units <= single ? 1 : Math.ceil(units / multi);
+  return { encoding: ucs ? "UCS-2" : "GSM-7", units, segments, offenders: [...offenders] };
+}
+
+function linksIn(text) {
+  return [...String(text || "").matchAll(/https?:\/\/[^\s"'<>)]+/g)].map((m) => m[0].replace(/[.,;:!?]+$/, ""));
+}
+
+function resolveDbUrl(root) {
+  if (process.env.CRM_DATABASE_URL) return process.env.CRM_DATABASE_URL;
+  for (const f of [".agents/marketing-kit.env", ".env.local", ".env"]) {
+    const p = path.join(root, f);
+    if (!fs.existsSync(p)) continue;
+    const txt = fs.readFileSync(p, "utf8");
+    for (const k of ["CRM_DATABASE_URL", "DATABASE_PUBLIC_URL", "DATABASE_URL"]) {
+      const m = txt.match(new RegExp(`^(?:export\\s+)?${k}=["']?([^"'\\n]+)`, "m"));
+      if (m && !m[1].includes(".railway.internal")) return m[1];
+    }
+  }
+  return null;
+}
+
+function checkCampaign(file) {
+  const errors = [], warns = [], info = [];
+  const E = (m) => errors.push(m), W = (m) => warns.push(m), I = (m) => info.push(m);
+  let c;
+  try { c = JSON.parse(fs.readFileSync(file, "utf8")); }
+  catch (e) { return { file, errors: [`not valid JSON: ${e.message}`], warns, info }; }
+  const root = findProjectRoot(path.dirname(file));
+  const slop = [...loadList(path.join(KIT, "templates/banned-phrases.txt")), ...loadList(path.join(root, ".agents/banned-phrases.txt"))];
+
+  // --- schema ---------------------------------------------------------------
+  if (!c.id || !/^[a-z0-9][a-z0-9-_]{2,63}$/.test(c.id)) E("id: required, lowercase slug (it becomes utm_campaign and the idempotency-key prefix)");
+  if (!GOALS.includes(c.goal)) E(`goal: one of ${GOALS.join("|")}`);
+  if (!c.hypothesis || c.hypothesis.length < 20) E("hypothesis: state what changes, for whom, and why (≥20 chars)");
+  if (!c.persona) W("persona: name the persona/segment from .agents/product-marketing.md this speaks to");
+  const aud = c.audience || {};
+  if (!aud.sql) E("audience.sql: required (inline SQL or a path to a .sql file)");
+  const cols = new Set(aud.columns || []);
+  if (!cols.size) E("audience.columns: list the columns the audience query returns");
+  if (!cols.has("contact_id")) E("audience.columns: must include contact_id (enrollment + attribution key)");
+  const m = c.primary_metric || {};
+  if (!m.name || !m.definition) E("primary_metric: {name, source, definition, window_days} required — one metric decides the test");
+  else if (!METRIC_SOURCES.includes(m.source)) E(`primary_metric.source: one of ${METRIC_SOURCES.join("|")}`);
+  if (c.goal !== "transactional") {
+    if (typeof c.holdout_pct !== "number") E("holdout_pct: required for non-transactional campaigns (0 is allowed, but say so)");
+    else if (c.holdout_pct === 0) W("holdout_pct is 0 — lift cannot be measured; results will be correlation only");
+    else if (c.holdout_pct > 50) W(`holdout_pct ${c.holdout_pct} withholds more than half the audience`);
+  }
+  const send = c.send || {};
+  if (!MODES.includes(send.mode)) E(`send.mode: one of ${MODES.join("|")}`);
+  if (send.mode === "triggered" && !send.trigger) E("send.trigger: triggered campaigns name the event that enrolls (e.g. 'usage.limit_90pct')");
+  if (!send.idempotency_key || !send.idempotency_key.includes("contact_id")) E("send.idempotency_key: must include {{contact_id}} so retries never double-send");
+  const channels = Array.isArray(c.channels) ? c.channels : [];
+  if (!channels.length) E("channels: at least one of email|sms");
+
+  // --- audience SQL ------------------------------------------------------------
+  let sql = aud.sql || "";
+  if (sql && /\.sql$/.test(sql)) {
+    const p = path.resolve(path.dirname(file), sql);
+    if (!fs.existsSync(p)) E(`audience.sql: file not found ${sql}`); else sql = fs.readFileSync(p, "utf8");
+  }
+  if (sql && /\b(insert|update|delete|drop|alter|truncate|grant)\b/i.test(sql.replace(/--.*$/gm, ""))) E("audience.sql: must be a read-only SELECT (enrollment writes happen in the app)");
+  if (sql && flags.has("--db")) {
+    const url = resolveDbUrl(root);
+    if (!url) W("--db: no CRM database URL resolvable — skipped live column check");
+    else {
+      try {
+        const q = `select * from (${sql.trim().replace(/;\s*$/, "")}) q limit 0`;
+        const out = execFileSync("psql", [url, "-X", "-q", "--csv", "-c", q], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: 20000 });
+        const real = new Set(out.split("\n")[0].split(",").map((s) => s.trim()).filter(Boolean));
+        for (const col of cols) if (!real.has(col)) E(`audience.columns: '${col}' is not returned by the query (real: ${[...real].join(", ")})`);
+        I(`--db: audience query OK, columns = ${[...real].join(", ")}`);
+      } catch (e) {
+        const msg = (e.stderr || e.message || "").toString().split("\n")[0];
+        if (/ENOENT/.test(e.message)) W("--db: psql not installed — skipped live column check");
+        else E(`--db: audience query failed: ${msg}`);
+      }
+    }
+  }
+
+  // --- per-channel ---------------------------------------------------------------
+  const maxLen = c.var_max_length || {};
+  for (const [i, ch] of channels.entries()) {
+    const tag = `channels[${i}](${ch.type})`;
+    const texts = ch.type === "email" ? [ch.subject, ch.preheader, ch.body_text, ch.body_html] : [ch.body];
+    const joined = texts.filter(Boolean).join("\n");
+    for (const v of texts.flatMap(varsIn)) {
+      const base = v.name.split(".")[0];
+      if (base === "campaign" || base === "link") continue;
+      if (!cols.has(v.name)) E(`${tag}: {{${v.name}}} is not an audience column — it would render blank`);
+      else if (v.fallback === undefined && !(c.required_columns || []).includes(v.name)) W(`${tag}: {{${v.name}}} has no fallback ({{${v.name} | there}}) and is not in required_columns`);
+    }
+    for (const bad of [/\bTODO\b/i, /lorem ipsum/i, /\[(?:NAME|FIRST ?NAME|COMPANY|LINK)\]/i, /\{\{\s*\}\}/, /\{[A-Z_]{3,}\}/])
+      if (bad.test(joined)) E(`${tag}: leftover placeholder matching ${bad}`);
+    for (const phrase of slop) {
+      const re = new RegExp(`\\b${phrase.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i");
+      if (re.test(joined)) W(`${tag}: slop phrase "${phrase}" — say the specific thing instead`);
+    }
+    const links = linksIn(joined);
+    for (const l of links) {
+      let u; try { u = new URL(l.replace(/\{\{[^}]*\}\}/g, "x")); } catch { E(`${tag}: malformed link ${l}`); continue; }
+      const p = u.searchParams;
+      for (const k of ["utm_source", "utm_medium", "utm_campaign"]) if (!p.get(k)) E(`${tag}: link missing ${k}: ${l}`);
+      if (p.get("utm_campaign") && c.id && p.get("utm_campaign") !== c.id && p.get("utm_campaign") !== "x")
+        E(`${tag}: utm_campaign=${p.get("utm_campaign")} ≠ campaign id ${c.id} (breaks GA4/PostHog ↔ DB attribution)`);
+    }
+    if (ch.type === "email") {
+      if (!ch.from || !/<[^@\s]+@[^>\s]+>|^[^@\s]+@[^\s]+$/.test(ch.from)) E(`${tag}: from must be an address on a verified Resend domain`);
+      if (!ch.subject) E(`${tag}: subject required`);
+      else if (ch.subject.length > 60) W(`${tag}: subject ${ch.subject.length} chars — clients truncate ~60 (mobile ~35)`);
+      if (!ch.preheader) W(`${tag}: no preheader — the inbox shows the first body line instead`);
+      if (!ch.body_text && !ch.body_html && !ch.template) E(`${tag}: body_text, body_html or template (React Email path) required`);
+      if (ch.template && !fs.existsSync(path.resolve(path.dirname(file), ch.template))) W(`${tag}: template ${ch.template} not found relative to the campaign file`);
+      if (!/\{\{\s*link\.unsubscribe|unsubscribe|manage preferences/i.test(joined + (ch.footer || "")) && c.goal !== "transactional")
+        W(`${tag}: no unsubscribe/preferences link — Gmail/Yahoo bulk-sender rules route these to spam`);
+    } else if (ch.type === "sms") {
+      if (!ch.from) E(`${tag}: from (Telnyx number or messaging_profile_id) required`);
+      if (!ch.body) { E(`${tag}: body required`); continue; }
+      const rendered = ch.body.replace(VAR_RE, (_, n, fb) => "x".repeat(maxLen[n] || Math.max(12, (fb || "").trim().length)));
+      const s = smsStats(rendered);
+      I(`${tag}: ${s.encoding}, ${s.units} units → ${s.segments} segment(s) at max var length`);
+      if (s.encoding === "UCS-2") W(`${tag}: UCS-2 because of ${JSON.stringify(s.offenders)} — ~2.3× the segments; swap smart quotes/emoji for GSM-7`);
+      if (s.segments > (ch.max_segments || 2)) E(`${tag}: ${s.segments} segments exceeds max_segments=${ch.max_segments || 2}`);
+    } else E(`${tag}: unknown channel type (email|sms)`);
+  }
+  if (c.variants && (!Array.isArray(c.variants) || c.variants.length < 2)) E("variants: an A/B test needs ≥2 variants");
+  return { file, errors, warns, info };
+}
+
+const results = files.map(checkCampaign);
+if (flags.has("--json")) console.log(JSON.stringify(results, null, 2));
+else for (const r of results) {
+  console.log(`\n▶ ${r.file}`);
+  for (const m of r.info) console.log(`  · ${m}`);
+  for (const m of r.warns) console.log(`  ⚠ ${m}`);
+  for (const m of r.errors) console.log(`  ✗ ${m}`);
+  console.log(r.errors.length ? `  RED — ${r.errors.length} error(s), ${r.warns.length} warning(s)` : `  GREEN — ${r.warns.length} warning(s)`);
+}
+const bad = results.some((r) => r.errors.length || (flags.has("--strict") && r.warns.length));
+process.exit(bad ? 1 : 0);

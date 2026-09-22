@@ -1,0 +1,30 @@
+# Hermes skills — installed from the vendor repo via the Hermes skills hub; `hermes skills update`
+# refreshes them every run (live). Hermes' bundled `humanizer` (a port of blader/humanizer) is used
+# as-is: never install a second copy.
+# identifier	kit component
+coreyhaines31/marketingskills/skills/product-marketing	4
+coreyhaines31/marketingskills/skills/customer-research	4
+coreyhaines31/marketingskills/skills/copywriting	4
+coreyhaines31/marketingskills/skills/copy-editing	4
+coreyhaines31/marketingskills/skills/emails	4
+coreyhaines31/marketingskills/skills/sms	4
+coreyhaines31/marketingskills/skills/churn-prevention	4
+coreyhaines31/marketingskills/skills/onboarding	4
+coreyhaines31/marketingskills/skills/pricing	4
+coreyhaines31/marketingskills/skills/offers	4
+coreyhaines31/marketingskills/skills/paywalls	4
+coreyhaines31/marketingskills/skills/referrals	4
+coreyhaines31/marketingskills/skills/ab-testing	4
+coreyhaines31/marketingskills/skills/analytics	4
+coreyhaines31/marketingskills/skills/attribution	4
+coreyhaines31/marketingskills/skills/marketing-psychology	4
+coreyhaines31/marketingskills/skills/marketing-loops	4
+coreyhaines31/marketingskills/skills/revops	4
+coreyhaines31/marketingskills/skills/cro	4
+coreyhaines31/marketingskills/skills/signup	4
+resend/resend-skills/skills/resend	7
+resend/resend-skills/skills/react-email	7
+resend/resend-skills/skills/email-best-practices	7
+team-telnyx/ai/providers/claude/plugins/telnyx-messaging/skills/telnyx-messaging-javascript	7
+team-telnyx/ai/providers/claude/plugins/telnyx-messaging/skills/telnyx-messaging-profiles-javascript	7
+stripe/ai/providers/claude/plugin/skills/stripe-best-practices	3

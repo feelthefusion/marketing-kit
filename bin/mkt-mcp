@@ -1,0 +1,116 @@
+#!/usr/bin/env bash
+# =============================================================================
+# Marketing Kit — MCP launcher (one entry point for every stdio MCP server)
+#
+#   mkt-mcp <db|telnyx|resend|ga4|gsc|railway> [project-dir]
+#
+# Why a launcher instead of raw `npx`/`uvx` lines in each host's config:
+#   * ALWAYS LATEST — every launch resolves `pkg@latest` (npx) / `pkg@latest` (uvx).
+#     Nothing is pinned, nothing is cloned; a restart picks up the newest release.
+#   * ONE SECRETS FILE for both hosts — ~/.config/marketing-kit/secrets.env (chmod 600).
+#     Desktop apps never source ~/.zshrc, so env vars in the rc file are invisible to
+#     MCP servers; this file is read at launch instead. Keys never land in config files.
+#   * PER-PROJECT DATABASE — `db` resolves the CRM database from the project you are in
+#     (.env / .env.local / Railway), so one global registration serves every repo.
+# =============================================================================
+set -euo pipefail
+
+SECRETS="${MKT_SECRETS:-$HOME/.config/marketing-kit/secrets.env}"
+# shellcheck disable=SC1090
+[ -f "$SECRETS" ] && { set -a; . "$SECRETS"; set +a; }
+export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
+
+die() { echo "mkt-mcp: $*" >&2; exit 1; }
+need() { [ -n "${!1:-}" ] || die "$1 is not set — add it to $SECRETS (see templates/secrets.env.example)"; }
+
+server="${1:-}"; shift || true
+
+# Project dir: explicit arg (Hermes passes ${workspaceFolder}) → Claude Code's env → cwd.
+project_dir() {
+    local d="${1:-}"
+    case "$d" in ''|'${'*) d="" ;; esac
+    [ -n "$d" ] && [ -d "$d" ] || d="${CLAUDE_PROJECT_DIR:-$PWD}"
+    printf '%s\n' "$d"
+}
+
+# Read KEY from a dotenv file without executing it.
+dotenv_get() {  # dotenv_get <file> <key>
+    [ -f "$1" ] || return 1
+    local v
+    v="$(grep -E "^(export[[:space:]]+)?$2=" "$1" | tail -1 | sed -E "s/^(export[[:space:]]+)?$2=//; s/^['\"]//; s/['\"][[:space:]]*$//")"
+    [ -n "$v" ] && printf '%s\n' "$v"
+}
+
+resolve_db_url() {  # resolve_db_url <project-dir> → prints URL, source on stderr
+    local dir="$1" f k v
+    if [ -n "${CRM_DATABASE_URL:-}" ]; then echo "  db ← \$CRM_DATABASE_URL" >&2; printf '%s\n' "$CRM_DATABASE_URL"; return 0; fi
+    for f in "$dir/.agents/marketing-kit.env" "$dir/.env.local" "$dir/.env"; do
+        for k in CRM_DATABASE_URL DATABASE_PUBLIC_URL DATABASE_URL; do
+            if v="$(dotenv_get "$f" "$k")" && [[ "$v" != *".railway.internal"* ]]; then
+                echo "  db ← $k in ${f#"$dir"/}" >&2; printf '%s\n' "$v"; return 0
+            fi
+        done
+    done
+    # Railway-linked project: the public proxy URL is reachable from a laptop; *.railway.internal is not.
+    if command -v railway >/dev/null 2>&1 && (cd "$dir" && railway status >/dev/null 2>&1); then
+        local svc
+        for svc in "${MKT_RAILWAY_DB_SERVICE:-}" Postgres postgres ""; do
+            v="$(cd "$dir" && railway variables ${svc:+--service "$svc"} --kv 2>/dev/null | sed -n 's/^DATABASE_PUBLIC_URL=//p' | head -1)"
+            [ -n "$v" ] && { echo "  db ← railway variables${svc:+ --service $svc} (DATABASE_PUBLIC_URL)" >&2; printf '%s\n' "$v"; return 0; }
+        done
+    fi
+    return 1
+}
+
+case "$server" in
+    db)
+        dir="$(project_dir "${1:-}")"
+        url="$(resolve_db_url "$dir")" || die "no CRM database found for $dir — set CRM_DATABASE_URL in $dir/.agents/marketing-kit.env or .env, or \`railway link\` the project"
+        mode="${MKT_DB_ACCESS:-$(dotenv_get "$dir/.agents/marketing-kit.env" MKT_DB_ACCESS || echo restricted)}"
+        case "$mode" in restricted|unrestricted) ;; *) die "MKT_DB_ACCESS must be restricted|unrestricted (got '$mode')" ;; esac
+        echo "  db access-mode=$mode" >&2
+        export DATABASE_URI="$url"
+        # postgres-mcp does not cap its `mcp` dependency and breaks on mcp 2.x (FastMCP renamed);
+        # the package itself stays @latest, only the SDK is held below 2 until upstream moves.
+        exec uvx --with "mcp>=1.3,<2" postgres-mcp@latest --access-mode="$mode"
+        ;;
+    db-resolve)
+        # Diagnostic: prints WHERE the DB URL comes from and the host — never the credentials.
+        dir="$(project_dir "${1:-}")"
+        errf="$(mktemp)"
+        url="$(resolve_db_url "$dir" 2>"$errf")" || { rm -f "$errf"; exit 1; }
+        src="$(sed 's/^ *db ← //' "$errf" | head -1)"; rm -f "$errf"
+        echo "$src → $(printf '%s' "$url" | sed -E 's#^[a-z]+://([^@]*@)?([^/:?]+).*#\2#')"
+        ;;
+    telnyx)
+        need TELNYX_API_KEY
+        exec npx -y @telnyx/mcp@latest --api-key="$TELNYX_API_KEY"
+        ;;
+    resend)
+        need RESEND_API_KEY
+        exec npx -y resend-mcp@latest
+        ;;
+    ga4)
+        # Google Analytics Data + Admin API (official googleanalytics/google-analytics-mcp).
+        # Auth: a service-account JSON (GOOGLE_APPLICATION_CREDENTIALS) or gcloud ADC.
+        [ -n "${GOOGLE_APPLICATION_CREDENTIALS:-}" ] || [ -f "$HOME/.config/gcloud/application_default_credentials.json" ] \
+            || die "no Google credentials — set GOOGLE_APPLICATION_CREDENTIALS in $SECRETS or run: gcloud auth application-default login --scopes https://www.googleapis.com/auth/analytics.readonly,https://www.googleapis.com/auth/cloud-platform"
+        exec uvx analytics-mcp@latest
+        ;;
+    gsc)
+        # Search Console (AminForou/mcp-gsc — community; Google ships no official GSC server).
+        # Reuses the same service account as GA4 unless GSC_CREDENTIALS_PATH is set.
+        export GSC_CREDENTIALS_PATH="${GSC_CREDENTIALS_PATH:-${GOOGLE_APPLICATION_CREDENTIALS:-}}"
+        if [ -n "$GSC_CREDENTIALS_PATH" ]; then export GSC_SKIP_OAUTH=true
+        else need GSC_OAUTH_CLIENT_SECRETS_FILE; fi
+        exec uvx mcp-search-console@latest
+        ;;
+    railway)
+        command -v railway >/dev/null 2>&1 || die "railway CLI missing — bash <(curl -fsSL https://railway.com/install.sh)"
+        exec railway mcp
+        ;;
+    ''|-h|--help)
+        sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//'
+        ;;
+    *) die "unknown server '$server' (db|telnyx|resend|ga4|gsc|railway)" ;;
+esac
