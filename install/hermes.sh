@@ -7,7 +7,7 @@
 #   vendor skills   `hermes skills install <owner/repo/path>` + `hermes skills update` each run
 #   humanizer       Hermes' bundled port of blader/humanizer (not installed twice)
 #   MCP servers     mcp_servers.* via `hermes config set` — stdio through mkt-mcp (@latest),
-#                   PostHog + Stripe hosted (OAuth), Resend via resend-mcp@latest
+#                   Resend via resend-mcp@latest · optional gsc/umami via mkt-settings
 #   ledger          memory.provider = supermemory (local) + mkt-ledger
 # =============================================================================
 set -euo pipefail
@@ -80,14 +80,17 @@ MM="$MKT_BIN/mkt-mcp"
 mcp_set crm-db "{\"command\": \"$MM\", \"args\": [\"db\", \"\${workspaceFolder}\"], \"timeout\": 120}"
 command -v railway >/dev/null 2>&1 && mcp_set railway "{\"command\": \"$MM\", \"args\": [\"railway\"]}" || warn "railway skipped — install the railway CLI"
 has_secret TELNYX_API_KEY && mcp_set telnyx "{\"command\": \"$MM\", \"args\": [\"telnyx\"]}" || warn "telnyx skipped — set TELNYX_API_KEY in $MKT_SECRETS, re-run"
+has_secret UMAMI_DATABASE_URL && mcp_set umami "{\"command\": \"$MM\", \"args\": [\"umami\"], \"timeout\": 120}" || warn "umami skipped — core web analytics not deployed yet: mkt-umami deploy (in an app repo), re-run"
 has_secret RESEND_API_KEY && mcp_set resend "{\"command\": \"$MM\", \"args\": [\"resend\"]}" || warn "resend skipped — set RESEND_API_KEY in $MKT_SECRETS, re-run"
-if google_creds_present; then
-    mcp_set ga4 "{\"command\": \"$MM\", \"args\": [\"ga4\"], \"timeout\": 180}"
-    mcp_set gsc "{\"command\": \"$MM\", \"args\": [\"gsc\"], \"timeout\": 180}"
-else warn "ga4/gsc skipped — set GOOGLE_APPLICATION_CREDENTIALS in $MKT_SECRETS (or gcloud ADC), re-run"; fi
-mcp_set posthog '{"url": "https://mcp.posthog.com/mcp", "auth": "oauth"}'
-mcp_set stripe  '{"url": "https://mcp.stripe.com", "auth": "oauth"}'
-say "  · PostHog / Stripe authorize in the browser on first use (or: hermes mcp login posthog | stripe)"
+if [ "$HAVE_HERMES" = 1 ]; then
+    # retired sources (first-party only): drop anything an older kit version registered
+    for r in ga4 posthog stripe; do hermes mcp remove "$r" </dev/null >/dev/null 2>&1 && say "  · $r removed (retired: data is first-party now)"; done
+    SKROOT="${HERMES_HOME:-$HOME/.hermes}/skills"
+    [ -L "$SKROOT/marketing/stripe-best-practices" ] || [ -d "$SKROOT/marketing/stripe-best-practices" ] \
+        && hermes skills uninstall stripe-best-practices --yes >/dev/null 2>&1 && say "  · stripe-best-practices skill removed (retired)"
+    say "▶ optional sources (your switches: mkt-settings)"
+    MKT_MCP="$MM" bash "$KIT_ROOT/bin/mkt-settings" apply hermes
+fi
 
 write_kit_version "$KIT_ROOT" "$HH"
 say "─── done ───────────────────────────────────────────────"

@@ -64,9 +64,10 @@ print(f"""# Growth stack — {os.path.basename(root)}
 - Worker: ? (Railway service / cron that drains the outbox)
 
 ## Analytics (journey-analytics)
-- GA4 property id: ?   · Search Console property: ?
-- PostHog project: ? {"(posthog-js present)" if has("posthog-js","posthog-node") else "(no PostHog SDK yet)"}
-- Stripe: {"stripe " + deps["stripe"] if "stripe" in deps else "?"} · contact_id in customer metadata: ?
+- First-party collector (/api/t → crm_events): ? (journey-analytics → references/first-party-tracking.ts)
+- Umami: website id ? · dashboard url ? (mkt-umami deploy / snippet)
+- Search Console (optional, mkt-settings gsc on): property ?
+- Revenue source: orders/payments tables above (confirm which rows count as revenue): ?
 
 ## KPIs (override kit defaults here)
 - North star: ?
@@ -132,7 +133,7 @@ else:
 PY
 rm -f "$BLOCK"
 
-# --- Claude Code: per-repo plugins (marketing skills, Resend, Telnyx, Stripe) -----------------
+# --- Claude Code: per-repo plugins (marketing skills, Resend, Telnyx) -----------------
 # Enabled in THIS repo only (.claude/settings.json, merged) so non-marketing sessions stay lean.
 find_claude() {
     command -v claude 2>/dev/null && return

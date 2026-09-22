@@ -1,6 +1,6 @@
 ---
 name: marketing-kit
-description: "Use for ANY growth, marketing, CRM, email, SMS, campaign, segment, funnel, churn, upsell, retention, acquisition or revenue task — and when installing or updating the Marketing Kit. Gives the workflow map (listen → segment → shape → write → harden → build/send → measure → remember) and which component owns each step: growth-data (CRM DB), journey-analytics (GA4/GSC/PostHog/Stripe), marketing skills, humanizer, campaign-harden + mkt-preflight, lifecycle-engine (Resend + Telnyx), playbook-ledger (Supermemory)."
+description: "Use for ANY growth, marketing, CRM, email, SMS, campaign, segment, funnel, churn, upsell, retention, acquisition or revenue task — and when installing or updating the Marketing Kit. Gives the workflow map (listen → segment → shape → write → harden → build/send → measure → remember) and which component owns each step: growth-data (CRM DB), journey-analytics (first-party events + orders, Umami, optional Search Console), marketing skills, humanizer, campaign-harden + mkt-preflight, lifecycle-engine (Resend + Telnyx), playbook-ledger (Supermemory)."
 ---
 
 # Marketing Kit (workflow map)
@@ -16,7 +16,7 @@ hand off to each other in this order.
 |---|-----------|------------------------|------|
 | 1 | **playbook-ledger** + Supermemory | local server :6767, `mkt-ledger` | ICPs, voice, offers, past lift, seasonal plays — recalled first, saved last |
 | 2 | **growth-data** + `crm-db` / `railway` MCP | `postgres-mcp@latest`, `railway mcp` | CRM schema, identity stitching, cohort SQL, read-only by default |
-| 3 | **journey-analytics** + `ga4` / `gsc` / PostHog / Stripe MCP | googleanalytics (official), AminForou, PostHog hosted MCP, Stripe plugin (official) | traffic → behavior → revenue, one join key (`utm_campaign` = campaign id) |
+| 3 | **journey-analytics** + first-party collector, `umami` MCP, optional `gsc` MCP | this kit · [umami-software/umami](https://github.com/umami-software/umami) (self-hosted, `:latest`) · AminForou/mcp-gsc (switch: `mkt-settings`) | traffic → behavior → revenue from the site's own data, one join key (`utm_campaign` = campaign id) |
 | 4 | Marketing skills (`product-marketing`, `customer-research`, `copywriting`, `copy-editing`, `emails`, `sms`, `churn-prevention`, `onboarding`, `pricing`, `offers`, `referrals`, `ab-testing`, `analytics`, `attribution`, `marketing-psychology`, `revops`…) | coreyhaines31/marketingskills | strategy + first draft; all read `.agents/product-marketing.md` |
 | 5 | `humanizer` | blader/humanizer (Hermes: bundled port) | strips AI tells from every customer-facing line |
 | 6 | **campaign-harden** + `mkt-preflight` | this kit | persona grill, claim-vs-data check, schema/variable/link/segment gate |
@@ -31,8 +31,9 @@ user anything.
 
 1. **Recall** — `mkt-ledger recall "<goal> <segment>"` (1). What worked, what flopped, ICP,
    voice rules. Never propose a play the ledger says already failed without saying why now differs.
-2. **Listen** — journey-analytics (3): GA4/GSC for intent and source, PostHog for in-app
-   behavior, Stripe for revenue, `crm-db` for the joined truth. Output: a number, not a vibe.
+2. **Listen** — journey-analytics (3): `crm-db` for events + orders (the joined truth), Umami for
+   the traffic picture, Search Console for search intent when switched on. All first-party.
+   Output: a number, not a vibe.
 3. **Segment** — growth-data (2): write the audience as a read-only SELECT returning
    `contact_id` + template columns; start from `references/cohorts.sql`.
 4. **Shape** — marketing skills (4): `churn-prevention` / `pricing` / `offers` / `onboarding` /
@@ -40,7 +41,7 @@ user anything.
 5. **Write** — `copywriting` / `emails` / `sms` (4) draft → `copy-editing` (4) → `humanizer` (5).
    Personalize only with columns the audience query actually returns.
 6. **Harden** — campaign-harden (6): persona grill with evidence from steps 2–3, every claim
-   checked against the DB/Stripe/product, then `mkt-preflight campaigns/<id>.campaign.json --db`
+   checked against the DB/orders/product, then `mkt-preflight campaigns/<id>.campaign.json --db`
    must be GREEN. It is also a step in `verify.sh` when the repo uses the Skill Starter Kit.
 7. **Build / send** — lifecycle-engine (7): campaign row + enrollment (with holdout) + outbox;
    Resend/Telnyx skills for current SDK calls; test send to the owner first; then live.
@@ -73,5 +74,5 @@ installs updated every run** (Hermes); MCP servers launch `@latest` through `mkt
 
 ## Works with →
 - **Skill Starter Kit** — its `verify-gate` runs `mkt-preflight`; `docs-freshness` before any
-  Resend/Telnyx/Stripe SDK call; `security-gate` before adding a package; `guardrails` blocks
+  Resend/Telnyx SDK call; `security-gate` before adding a package; `guardrails` blocks
   irreversible shell commands; `superpowers` plans multi-file lifecycle-engine builds.

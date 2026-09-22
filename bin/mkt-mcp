@@ -2,7 +2,7 @@
 # =============================================================================
 # Marketing Kit — MCP launcher (one entry point for every stdio MCP server)
 #
-#   mkt-mcp <db|telnyx|resend|ga4|gsc|railway> [project-dir]
+#   mkt-mcp <db|telnyx|resend|railway|gsc|umami> [project-dir]   (gsc: optional, see mkt-settings)
 #
 # Why a launcher instead of raw `npx`/`uvx` lines in each host's config:
 #   * ALWAYS LATEST — every launch resolves `pkg@latest` (npx) / `pkg@latest` (uvx).
@@ -31,6 +31,14 @@ project_dir() {
     case "$d" in ''|'${'*) d="" ;; esac
     [ -n "$d" ] && [ -d "$d" ] || d="${CLAUDE_PROJECT_DIR:-$PWD}"
     printf '%s\n' "$d"
+}
+
+# Feature switches (non-secret) live in settings.env; env vars override. Written by mkt-settings.
+SETTINGS="${MKT_SETTINGS:-$HOME/.config/marketing-kit/settings.env}"
+setting_on() {  # setting_on MKT_GSC → 0 when "on"
+    local v="${!1:-}"
+    [ -z "$v" ] && [ -f "$SETTINGS" ] && v="$(grep -E "^$1=" "$SETTINGS" | tail -1 | cut -d= -f2- | tr -d '"'"'"' ')"
+    [ "$v" = on ]
 }
 
 # Read KEY from a dotenv file without executing it.
@@ -90,20 +98,22 @@ case "$server" in
         need RESEND_API_KEY
         exec npx -y resend-mcp@latest
         ;;
-    ga4)
-        # Google Analytics Data + Admin API (official googleanalytics/google-analytics-mcp).
-        # Auth: a service-account JSON (GOOGLE_APPLICATION_CREDENTIALS) or gcloud ADC.
-        [ -n "${GOOGLE_APPLICATION_CREDENTIALS:-}" ] || [ -f "$HOME/.config/gcloud/application_default_credentials.json" ] \
-            || die "no Google credentials — set GOOGLE_APPLICATION_CREDENTIALS in $SECRETS or run: gcloud auth application-default login --scopes https://www.googleapis.com/auth/analytics.readonly,https://www.googleapis.com/auth/cloud-platform"
-        exec uvx analytics-mcp@latest
-        ;;
     gsc)
-        # Search Console (AminForou/mcp-gsc — community; Google ships no official GSC server).
-        # Reuses the same service account as GA4 unless GSC_CREDENTIALS_PATH is set.
+        # OPTIONAL (off by default): Google Search Console — the one outside source, because
+        # search-query data exists only at Google. Read-only; collects nothing from visitors.
+        # Toggle: mkt-settings gsc on|off. Server: AminForou/mcp-gsc (Google ships no official one).
+        setting_on MKT_GSC || die "Search Console is OFF — turn it on with: mkt-settings gsc on"
         export GSC_CREDENTIALS_PATH="${GSC_CREDENTIALS_PATH:-${GOOGLE_APPLICATION_CREDENTIALS:-}}"
         if [ -n "$GSC_CREDENTIALS_PATH" ]; then export GSC_SKIP_OAUTH=true
         else need GSC_OAUTH_CLIENT_SECRETS_FILE; fi
         exec uvx mcp-search-console@latest
+        ;;
+    umami)
+        # CORE: read-only SQL over your self-hosted Umami's own Postgres (website_event,
+        # session.distinct_id = crm contact id). UMAMI_DATABASE_URL is written by `mkt-umami deploy`.
+        [ -n "${UMAMI_DATABASE_URL:-}" ] || die "UMAMI_DATABASE_URL not set — run: mkt-umami deploy (or add it to $SECRETS)"
+        export DATABASE_URI="$UMAMI_DATABASE_URL"
+        exec uvx --with "mcp>=1.3,<2" postgres-mcp@latest --access-mode=restricted
         ;;
     railway)
         command -v railway >/dev/null 2>&1 || die "railway CLI missing — bash <(curl -fsSL https://railway.com/install.sh)"
@@ -112,5 +122,5 @@ case "$server" in
     ''|-h|--help)
         sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//'
         ;;
-    *) die "unknown server '$server' (db|telnyx|resend|ga4|gsc|railway)" ;;
+    *) die "unknown server '$server' (db|telnyx|resend|railway|gsc|umami)" ;;
 esac

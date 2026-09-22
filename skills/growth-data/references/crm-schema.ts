@@ -12,7 +12,9 @@
 //   3. Every outbound message is a row BEFORE it is sent (outbox), keyed by an
 //      idempotency key, so retries and crashes never double-send.
 //   4. Enrollment records variant + holdout, so lift is computable later.
-//   5. Revenue is attributed from Stripe facts, never from click counts.
+//   5. Revenue comes from the app's OWN order/payment rows, never from click counts.
+//   6. All data is first-party: the site writes its own events (journey-analytics →
+//      references/first-party-tracking.ts); no third-party analytics or billing IDs.
 // =============================================================================
 import {
   pgTable, text, timestamp, jsonb, boolean, integer, bigint, uuid, index, uniqueIndex, pgEnum,
@@ -33,7 +35,7 @@ export const crmContacts = pgTable("crm_contacts", {
   firstName: text("first_name"),
   lastName: text("last_name"),
   timezone: text("timezone"),                      // IANA; drives quiet hours + send-time
-  plan: text("plan").notNull().default("free"),    // mirrored from Stripe webhook
+  plan: text("plan").notNull().default("free"),    // mirrored from the app's own billing/orders
   lifecycleStage: text("lifecycle_stage").notNull().default("lead"), // lead|trial|active|at_risk|churned
   traits: jsonb("traits").$type<Record<string, unknown>>().notNull().default({}), // typed via zod at the edge
   emailStatus: text("email_status").notNull().default("ok"),   // ok|bounced|complained|unsubscribed
@@ -52,13 +54,14 @@ export const crmContacts = pgTable("crm_contacts", {
 
 export type Touch = {
   utm_source?: string; utm_medium?: string; utm_campaign?: string; utm_content?: string; utm_term?: string;
-  referrer?: string; landing_page?: string; ga_client_id?: string; at: string;
+  referrer?: string; landing_page?: string; anon_id?: string; at: string;
 };
 
-// Every external identifier for a contact: stitch GA4, PostHog, Stripe, Resend, Telnyx to one person.
+// Every other identifier for a contact: pre-signup browser id, Resend/Telnyx ids, legacy ids.
+// (Umami needs no row: the site calls umami.identify(contact.id), so session.distinct_id IS the id.)
 export const crmIdentities = pgTable("crm_identities", {
   contactId: uuid("contact_id").notNull().references(() => crmContacts.id, { onDelete: "cascade" }),
-  kind: text("kind").notNull(),   // posthog_distinct_id | ga_client_id | stripe_customer | resend_contact | anon_id
+  kind: text("kind").notNull(),   // anon_id | resend_contact | telnyx_number | legacy_user_id
   value: text("value").notNull(),
   firstSeenAt: timestamp("first_seen_at", { withTimezone: true }).notNull().defaultNow(),
 }, (t) => [uniqueIndex("crm_identities_kind_value_uq").on(t.kind, t.value), index("crm_identities_contact_idx").on(t.contactId)]);
@@ -68,13 +71,17 @@ export const crmEvents = pgTable("crm_events", {
   id: bigint("id", { mode: "number" }).primaryKey().generatedAlwaysAsIdentity(),
   contactId: uuid("contact_id").references(() => crmContacts.id, { onDelete: "cascade" }),
   name: text("name").notNull(),     // object.action, snake_case: "report.viewed", "usage.limit_90pct"
-  source: text("source").notNull(), // app | posthog | stripe | resend | telnyx | ga4
+  source: text("source").notNull(), // web (collector) | app (server code) | resend | telnyx
+  anonId: text("anon_id"),          // browser id before login; stitched to contact_id at signup/login
+  sessionId: text("session_id"),    // client-rolled, 30-min idle timeout — sessions without a sessions table
   properties: jsonb("properties").$type<Record<string, unknown>>().notNull().default({}),
   occurredAt: timestamp("occurred_at", { withTimezone: true }).notNull(),
   dedupeKey: text("dedupe_key"),    // provider event id; makes webhook replays harmless
 }, (t) => [
   index("crm_events_contact_time_idx").on(t.contactId, t.occurredAt),
   index("crm_events_name_time_idx").on(t.name, t.occurredAt),
+  index("crm_events_anon_idx").on(t.anonId),
+  // High volume? add a BRIN index on occurred_at and partition by month (growth-data SKILL).
   uniqueIndex("crm_events_dedupe_uq").on(t.source, t.dedupeKey),
 ]);
 
@@ -146,9 +153,11 @@ export const crmSuppressions = pgTable("crm_suppressions", {
 }, (t) => [uniqueIndex("crm_suppressions_uq").on(t.channel, t.value)]);
 
 // --- revenue ------------------------------------------------------------------
-// Written by the Stripe webhook handler (invoice.paid, customer.subscription.updated, charge.refunded).
+// Revenue facts from the app's OWN orders/payments. Either write rows here from the code that
+// records a payment/refund/plan change — or, if the app already has orders/payments tables,
+// skip this table and define `crm_revenue` as a SQL VIEW over them with these columns.
 export const crmRevenue = pgTable("crm_revenue", {
-  id: text("id").primaryKey(),                         // Stripe invoice/charge id
+  id: text("id").primaryKey(),                         // the app's own order/payment id
   contactId: uuid("contact_id").references(() => crmContacts.id),
   kind: text("kind").notNull(),                        // new | expansion | renewal | contraction | refund
   amountCents: bigint("amount_cents", { mode: "number" }).notNull(), // negative for refunds/contraction

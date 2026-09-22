@@ -13,7 +13,7 @@ them before writing a provider call; this skill holds the architecture.
 ## Architecture (five pieces, each idempotent)
 
 ```
-event (app / PostHog / Stripe webhook) ─▶ crm_events
+event (site collector / app code / Resend+Telnyx webhooks) ─▶ crm_events
                      │  rule: SQL cohort or event match (campaign.send.trigger)
                      ▼
           crm_enrollments (variant, holdout)  ── holdout: row, no message

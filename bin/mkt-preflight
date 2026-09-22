@@ -12,7 +12,7 @@
 //   sms        GSM-7 vs UCS-2, segment count with vars at max length, cost multiplier
 //   email      subject/preheader length, from address, unsubscribe/footer link present
 //   links      utm_source/utm_medium/utm_campaign on every link; utm_campaign == campaign id
-//              (the join key GA4, PostHog and the messages table share)
+//              (the join key the collector, Umami and the messages table share)
 //   slop       banned AI-cliché phrases (kit list + project .agents/banned-phrases.txt)
 //   leftovers  TODO / lorem / [NAME] / unresolved {{…}} / {{ var }} with no fallback
 // Zero dependencies; Node 18+.
@@ -34,7 +34,7 @@ if (!files.length || flags.has("--help")) {
 
 const GOALS = ["acquisition", "activation", "upsell", "retention", "reactivation", "referral", "transactional"];
 const MODES = ["one-off", "scheduled", "triggered"];
-const METRIC_SOURCES = ["db", "posthog", "stripe", "ga4", "resend", "telnyx"];
+const METRIC_SOURCES = ["db", "umami", "resend", "telnyx"];   // first-party only
 const GSM7 =
   "@£$¥èéùìòÇ\nØø\rÅåΔ_ΦΓΛΩΠΨΣΘΞÆæßÉ !\"#¤%&'()*+,-./0123456789:;<=>?¡ABCDEFGHIJKLMNOPQRSTUVWXYZÄÖÑÜ§¿abcdefghijklmnopqrstuvwxyzäöñüà";
 const GSM7_EXT = "^{}\\[~]|€"; // cost 2 septets each
@@ -176,7 +176,7 @@ function checkCampaign(file) {
       const p = u.searchParams;
       for (const k of ["utm_source", "utm_medium", "utm_campaign"]) if (!p.get(k)) E(`${tag}: link missing ${k}: ${l}`);
       if (p.get("utm_campaign") && c.id && p.get("utm_campaign") !== c.id && p.get("utm_campaign") !== "x")
-        E(`${tag}: utm_campaign=${p.get("utm_campaign")} ≠ campaign id ${c.id} (breaks GA4/PostHog ↔ DB attribution)`);
+        E(`${tag}: utm_campaign=${p.get("utm_campaign")} ≠ campaign id ${c.id} (breaks campaign ↔ traffic ↔ DB attribution)`);
     }
     if (ch.type === "email") {
       if (!ch.from || !/<[^@\s]+@[^>\s]+>|^[^@\s]+@[^\s]+$/.test(ch.from)) E(`${tag}: from must be an address on a verified Resend domain`);

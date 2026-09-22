@@ -26,8 +26,8 @@
   "holdout_pct": 10,
   "primary_metric": {
     "name": "reactivated_7d",
-    "source": "posthog",
-    "definition": "contact fires `session_started` within 7 days of first message",
+    "source": "db",
+    "definition": "contact has any crm_events row (source web|app) within 7 days of first message",
     "window_days": 7
   },
   "guardrail_metrics": [

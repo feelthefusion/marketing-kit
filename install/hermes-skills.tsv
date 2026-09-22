@@ -1,7 +1,7 @@
 # Hermes skills — installed from the vendor repo via the Hermes skills hub; `hermes skills update`
 # refreshes them every run (live). Hermes' bundled `humanizer` (a port of blader/humanizer) is used
 # as-is: never install a second copy.
-# `official` = the vendor's own org (resend/, team-telnyx/, stripe/). Hermes' scanner flags normal
+# `official` = the vendor's own org (resend/, team-telnyx/). Hermes' scanner flags normal
 # API-client patterns in them (env API keys, HTTP sends); the same skills ship in the vendors' Claude
 # Code plugins, so they install with --force. Community skills never get --force.
 # identifier	kit component	trust
@@ -30,4 +30,3 @@ resend/resend-skills/skills/react-email	7	official
 resend/resend-skills/skills/email-best-practices	7	official
 team-telnyx/ai/providers/claude/plugins/telnyx-messaging/skills/telnyx-messaging-javascript	7	official
 team-telnyx/ai/providers/claude/plugins/telnyx-messaging/skills/telnyx-messaging-profiles-javascript	7	official
-stripe/ai/providers/claude/plugin/skills/stripe-best-practices	3	official

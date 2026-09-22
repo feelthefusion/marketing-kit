@@ -42,11 +42,11 @@ link_skill() {  # link_skill <src-dir> <dst-dir>
 link_bins() {  # $1 = kit root
     mkdir -p "$MKT_BIN"
     local b
-    for b in mkt-mcp mkt-ledger mkt-preflight mkt-doctor; do
+    for b in mkt-mcp mkt-ledger mkt-preflight mkt-doctor mkt-settings mkt-umami; do
         chmod +x "$1/bin/$b"; ln -sfn "$1/bin/$b" "$MKT_BIN/$b"
     done
     chmod +x "$1/install/init-project.sh"; ln -sfn "$1/install/init-project.sh" "$MKT_BIN/mkt-init"
-    ok "mkt-mcp mkt-ledger mkt-preflight mkt-doctor mkt-init → $MKT_BIN"
+    ok "mkt-mcp mkt-ledger mkt-preflight mkt-doctor mkt-settings mkt-umami mkt-init → $MKT_BIN"
     case ":$PATH:" in *":$MKT_BIN:"*) ;; *) warn "$MKT_BIN is not on PATH — add: export PATH=\"\$HOME/.local/bin:\$PATH\"" ;; esac
 }
 
@@ -66,15 +66,11 @@ has_secret() {  # has_secret KEY → 0 when set (env or secrets file)
     [ -f "$MKT_SECRETS" ] && grep -qE "^$1=.+" "$MKT_SECRETS"
 }
 
-google_creds_present() {
-    has_secret GOOGLE_APPLICATION_CREDENTIALS || [ -f "$HOME/.config/gcloud/application_default_credentials.json" ]
-}
-
 ensure_runtime() {
     command -v node >/dev/null 2>&1 && ok "node $(node -v)" || warn "node missing — install Node 20+ (npx servers + mkt-preflight need it)"
     if command -v uvx >/dev/null 2>&1; then ok "uv $(uv --version 2>/dev/null | awk '{print $2}')"
     else
-        say "  · installing uv (runs postgres-mcp, analytics-mcp, mcp-search-console)"
+        say "  · installing uv (runs postgres-mcp and, if enabled, mcp-search-console)"
         curl -LsSf https://astral.sh/uv/install.sh 2>/dev/null | env UV_INSTALL_DIR="$MKT_BIN" sh >/dev/null 2>&1 \
             && ok "uv installed → $MKT_BIN" || warn "uv install failed — https://docs.astral.sh/uv/"
     fi
@@ -93,7 +89,11 @@ ensure_supermemory_server() {
     else
         if [ ! -x "$HOME/.local/bin/supermemory-server" ]; then
             say "  · installing supermemory-server (official installer)"
-            curl -fsSL https://supermemory.ai/install | bash >/dev/null 2>&1 && ok "supermemory-server installed" \
+            # The installer prompts on /dev/tty for an LLM key; headless shells (CI, containers) can't
+            # open it, so skip the prompt there — search works without a key, extraction needs one.
+            local np=""; ( : </dev/tty ) 2>/dev/null || np=1
+            curl -fsSL https://supermemory.ai/install | SUPERMEMORY_NO_PROMPT="${np:-${SUPERMEMORY_NO_PROMPT:-}}" bash >/dev/null 2>&1 \
+                && ok "supermemory-server installed" \
                 || { warn "Supermemory install failed — see https://supermemory.ai/install"; return 0; }
         fi
         if [ "$(uname -s)" = Darwin ]; then
@@ -115,10 +115,27 @@ EOF
             fi
             launchctl bootstrap "gui/$(id -u)" "$agent" 2>/dev/null || launchctl kickstart -k "gui/$(id -u)/com.supermemory.local" 2>/dev/null || true
             ok "launchd agent com.supermemory.local (auto-start at login)"
+        elif command -v systemctl >/dev/null 2>&1 && systemctl --user show-environment >/dev/null 2>&1; then
+            local unit="$HOME/.config/systemd/user/supermemory.service"
+            mkdir -p "$(dirname "$unit")"
+            printf '[Unit]\nDescription=Supermemory local server\n[Service]\nExecStart=%s\nWorkingDirectory=%s\nRestart=always\n[Install]\nWantedBy=default.target\n' \
+                "$HOME/.local/bin/supermemory-server" "$HOME" > "$unit"
+            systemctl --user daemon-reload && systemctl --user enable --now supermemory.service >/dev/null 2>&1 \
+                && ok "systemd --user unit supermemory.service (auto-start at login)" || warn "systemd unit failed — systemctl --user status supermemory"
         else
-            warn "Linux: start it with  nohup supermemory-server >/dev/null 2>&1 &  (or a systemd --user unit)"
+            mkdir -p "$HOME/.supermemory"
+            # data dir is ./.supermemory relative to the CWD — always launch from $HOME
+            ( cd "$HOME" && nohup "$HOME/.local/bin/supermemory-server" >"$HOME/.supermemory/server.log" 2>&1 & )
+            ok "supermemory-server started in background (no systemd user session — re-run the installer after reboot)"
         fi
-        sleep 3
+        up=0; for _ in $(seq 1 60); do   # first boot: port answers a moment before the api key is persisted
+            curl -s -o /dev/null --max-time 2 http://localhost:6767/ && up=1 && [ -s "$HOME/.supermemory/api-key" ] && break; sleep 1; done
+        if [ "$up" = 0 ]; then
+            warn "supermemory-server did not start — it requires an LLM key. Fix (either):"
+            warn "   export ANTHROPIC_API_KEY=… (or OPENAI_/GEMINI_) and re-run this installer"
+            warn "   or run  supermemory-server  once in a terminal and paste a key when asked"
+            return 0
+        fi
     fi
     [ -s "$HOME/.supermemory/api-key" ] && ok "api key at ~/.supermemory/api-key" \
         || warn "no api key yet — run supermemory-server once in a terminal (first boot mints it), then re-run"

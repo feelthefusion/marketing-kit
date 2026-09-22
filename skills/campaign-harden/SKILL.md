@@ -1,6 +1,6 @@
 ---
 name: campaign-harden
-description: "Use before any campaign, sequence, email, SMS, landing page, or upsell/retention trigger goes live, or when asked to review, critique, stress-test or 'grill' copy or a campaign. Runs the persona grill (does this speak to what the data says this segment cares about?), the claim check (every number, feature and price verified against DB/Stripe/product), the de-slop pass (copy-editing + humanizer), and the mkt-preflight gate (schema, variables, links/UTMs, SMS segments). Blocks launch until preflight is GREEN."
+description: "Use before any campaign, sequence, email, SMS, landing page, or upsell/retention trigger goes live, or when asked to review, critique, stress-test or 'grill' copy or a campaign. Runs the persona grill (does this speak to what the data says this segment cares about?), the claim check (every number, feature and price verified against DB/orders/product), the de-slop pass (copy-editing + humanizer), and the mkt-preflight gate (schema, variables, links/UTMs, SMS segments). Blocks launch until preflight is GREEN."
 ---
 
 # Campaign Harden (persona grill + copy integrity + preflight)
@@ -19,7 +19,7 @@ customer's own data, then proves the mechanics with a script.
 ## 1. Persona grill — answer each with evidence, not adjectives
 
 Ask these as a skeptical member of the target segment. Each answer cites a query result, a
-PostHog insight, a customer quote, or a ledger entry. "Unknown" is allowed; invented is not.
+analytics report (journey-analytics), a customer quote, or a ledger entry. "Unknown" is allowed; invented is not.
 
 1. **Who exactly?** Name the segment by its SQL filter. What share of revenue/users is it?
 2. **Why now?** Which observed behavior (event, limit hit, inactivity, plan change) triggers
@@ -43,7 +43,7 @@ Rewrite until every answer is concrete. Keep the grill Q&A in the PR/campaign no
 
 For every factual token in the copy — numbers, prices, plan names, feature names, dates,
 "3 changes since", "you saved X":
-- trace it to a source: a column in the audience query (personalized), Stripe (prices/plans),
+- trace it to a source: a column in the audience query (personalized), the app's own plans/prices (DB or pricing config),
   the codebase (feature exists, route exists), or the ledger (social-proof numbers);
 - if it comes from a column, that column must be in `audience.columns`; if it can be null,
   give a fallback `{{col | fallback}}` or list it in `required_columns` and filter nulls in SQL;

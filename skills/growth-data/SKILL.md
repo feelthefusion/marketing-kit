@@ -1,6 +1,6 @@
 ---
 name: growth-data
-description: "Use when querying, modeling, or changing the app's own CRM data — contacts, identities, events, segments/cohorts, enrollments, messages, suppressions, revenue — in Postgres on Railway via the crm-db (postgres-mcp) and railway MCP servers. Covers the reference Drizzle schema, identity stitching (GA4/PostHog/Stripe IDs → one contact), cohort SQL, read-only vs write access, and schema changes through migrations."
+description: "Use when querying, modeling, or changing the app's own CRM data — contacts, identities, events, segments/cohorts, enrollments, messages, suppressions, revenue — in Postgres on Railway via the crm-db (postgres-mcp) and railway MCP servers. Covers the reference Drizzle schema, identity stitching (pre-login anon id → one contact), cohort SQL, read-only vs write access, and schema changes through migrations."
 ---
 
 # Growth Data (the CRM you own)
@@ -35,9 +35,10 @@ the rows affected with a `select count(*)` first, run inside a transaction, past
 
 ## Schema rules (why each table exists)
 
-- **One person, many IDs** — `crm_identities(kind, value)` stitches `posthog_distinct_id`,
-  `ga_client_id`, `stripe_customer`, `anon_id` to one `contact_id`. Write the pairing at
-  signup/login (PostHog `identify`, GA4 `user_id`, Stripe customer creation).
+- **One person, many IDs** — `crm_identities(kind, value)` links the pre-login browser
+  `anon_id` (plus Resend/Telnyx/legacy ids) to one `contact_id`. `stitchAnon()` writes it at
+  signup/login (journey-analytics → `references/first-party-tracking.ts`); Umami needs no row
+  because the site calls `umami.identify(contact.id)`.
 - **Events are the journey** — `crm_events` is append-only with `source` and a provider
   `dedupe_key` (webhook replays are harmless). Names are `object.action` snake_case and listed
   in `growth-stack.md`; a new name gets added there in the same change.
@@ -45,8 +46,13 @@ the rows affected with a `select count(*)` first, run inside a transaction, past
   unique `idempotency_key`. lifecycle-engine owns this.
 - **Holdouts are rows** — `crm_enrollments.holdout = true` means eligible and deliberately not
   messaged. Without it, lift is unknowable.
-- **Revenue from Stripe facts** — `crm_revenue` is written by the Stripe webhook; attribution
-  is computed, never typed in.
+- **Revenue from the app's own orders/payments** — `crm_revenue` is either written by the code
+  that records a payment/refund/plan change, or is a VIEW over the existing orders/payments
+  tables. Attribution is computed, never typed in.
+- **First-party only** — every row comes from the site or its own databases. No third-party
+  analytics or billing IDs in the schema.
+- **High volume** — `crm_events` past ~10M rows: BRIN index on `occurred_at`, monthly
+  partitions, and a retention policy for raw `page.viewed` (keep aggregates).
 - **Traits are typed at the edge** — `traits jsonb` is validated by a zod schema in the app
   before write; a template may only use a trait the audience query projects as a column.
 
@@ -71,7 +77,8 @@ the rows affected with a `select count(*)` first, run inside a transaction, past
   (gitignored) or the app's `.env`.
 
 ## Works with →
-- **journey-analytics** — joins these tables with GA4/PostHog/Stripe; owns lift math.
+- **journey-analytics** — the first-party collector that fills `crm_events`, analytics SQL,
+  Umami, optional Search Console; owns lift math.
 - **lifecycle-engine** — writes enrollments/messages; reads suppressions at send time.
 - **campaign-harden** — `mkt-preflight --db` runs the audience SQL here.
 - **playbook-ledger** — save the table mapping and winning cohort definitions.

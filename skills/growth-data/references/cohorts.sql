@@ -8,7 +8,7 @@ with w as (
          count(*) filter (where occurred_at >= now() - interval '14 days')                        as recent,
          count(*) filter (where occurred_at <  now() - interval '14 days'
                             and occurred_at >= now() - interval '42 days') / 2.0                  as baseline
-  from crm_events where source in ('app','posthog') and occurred_at >= now() - interval '42 days'
+  from crm_events where source in ('web','app') and occurred_at >= now() - interval '42 days'
   group by contact_id)
 select c.id as contact_id, c.email, c.first_name, c.plan, w.recent, w.baseline
 from w join crm_contacts c on c.id = w.contact_id
