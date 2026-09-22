@@ -139,7 +139,9 @@ EOF
     fi
     [ -s "$HOME/.supermemory/api-key" ] && ok "api key at ~/.supermemory/api-key" \
         || warn "no api key yet — run supermemory-server once in a terminal (first boot mints it), then re-run"
-    [ -s "$HOME/.supermemory/env" ] || warn "no LLM provider in ~/.supermemory/env — memory EXTRACTION needs OPENAI_API_KEY (+ OPENAI_BASE_URL for OpenRouter); search works without it"
+    # provider key: plain env file, or the encrypted env.enc the official installer writes
+    { [ -s "$HOME/.supermemory/env" ] || [ -s "$HOME/.supermemory/env.enc" ]; } \
+        || warn "no LLM provider for Supermemory — memory EXTRACTION needs OPENAI_/ANTHROPIC_/GEMINI_API_KEY in ~/.supermemory/env; search works without it"
 }
 
 write_marked_block() {  # write_marked_block <file> <marker> <content-file>
