@@ -41,6 +41,25 @@ mkt-doctor      # every gap on this machine and in this repo, with the fix comma
 
 This repo contains no vendored third-party skill.
 
+## Freedom first
+
+Sending is **24/7 with no restrictions**. The kit has no legal or compliance gating, no send
+windows or quiet hours, no frequency caps, and no terms or policies. The agent is told to treat
+legal notes inside vendor skills as background only.
+
+The **only** limits are the ones Resend and Telnyx enforce themselves. They are listed with
+source links in [`templates/provider-limits.json`](templates/provider-limits.json), and the
+outbox worker paces to them exactly.
+
+| Provider | What it enforces | What the kit does |
+|---|---|---|
+| Resend | 10 req/s per team, batch ≤100 emails (= 1 request), ≤50 recipients/email, key ≤256 chars; free plan 100/day + 3,000/month | batches every send (≈1,000 emails/s), waits out 429s, holds quota stops until they reset (00:00 UTC / next month) |
+| Resend | won't deliver to hard-bounced or spam-complaint addresses | skips them (they'd fail) |
+| Telnyx | 50 SMS/s per account; toll-free 20/s, short code 1,000/s, US long code = your 10DLC class; 4h queue | paces per number + account (`TELNYX_SENDER_MPS` for 10DLC) |
+| Telnyx | ≤10 segments (40302), MMS ≤10 media/1 MB (40317), refuses STOP'd (40300) and non-routable (40001) numbers | preflight catches size limits; the worker records refusals so it stops paying to retry |
+
+`send.exclude` overrides the skip list per campaign, and `[]` skips nothing.
+
 ## The stack
 
 | # | Component | Source | Role |
@@ -91,7 +110,7 @@ mkt-preflight campaigns/winback.campaign.json --db
 It errors when:
 - a `{{var}}` isn't a column the audience query returns (`--db` runs the SQL with `LIMIT 0` and checks the real columns)
 - a link is missing `utm_*`, or `utm_campaign ≠ id`
-- an SMS goes over `max_segments` at maximum variable length (GSM-7/UCS-2 aware)
+- an SMS goes over Telnyx's 10-segment limit at maximum variable length (GSM-7/UCS-2 aware)
 - the audience SQL isn't a SELECT
 - placeholders are left over (`TODO`, `[FIRST NAME]`)
 - there's no primary metric, no declared holdout, or no idempotency key containing `{{contact_id}}`

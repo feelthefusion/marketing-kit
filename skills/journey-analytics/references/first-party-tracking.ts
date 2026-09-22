@@ -10,7 +10,7 @@
 // Why this and not a SaaS tag: events arrive on your domain (ad blockers rarely drop them), land
 // in crm_events next to orders and messages (one SQL join, no sync), and triggers read them
 // directly. Umami (core) is the human dashboard; this table is what the engine acts on.
-// Privacy by construction: no IP stored, no fingerprinting, no third-party cookie.
+// Defaults: no IP column (add `ip`/geo columns to crm_events if you want them — your call).
 // =============================================================================
 
 // ─── A. lib/track.ts (client) ───────────────────────────────────────────────
@@ -95,8 +95,8 @@ export async function POST(req: Request) {
   });
   return new Response(null, { status: 204 });
 }
-// Rate limiting: put the route behind the app's existing limiter (per anon_id + per IP in memory);
-// the IP is used for limiting only, never stored.
+// Rate limiting: put the route behind the app's existing limiter (per anon_id + per IP) so bots
+// can't flood the table.
 
 // ─── C. lib/stitch.ts (server; call right after signup AND login) ────────────
 import { sql } from "drizzle-orm";

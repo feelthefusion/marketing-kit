@@ -45,7 +45,7 @@ revenue"*, and to show the queries that produced them.
 ## Reports (`references/analytics.sql`; tested on Postgres)
 Traffic by source (#1), landing page → signup (#2), funnel (#3), weekly retention (#4), revenue by
 first-touch source (#5), campaign clicks → sessions (#6), feature adoption (#7), Umami U1/U2.
-Cohorts for sending (churn risk, upsell, activation gap, lift, fatigue) live in
+Cohorts for sending (churn risk, upsell, activation gap, lift, message volume) live in
 growth-data `references/cohorts.sql`.
 
 ## KPI definitions (use these names; override in growth-stack.md)

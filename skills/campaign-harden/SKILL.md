@@ -32,10 +32,9 @@ analytics report (journey-analytics), a customer quote, or a ledger entry. "Unkn
 7. **Upsell/retention fit** — does the offer match the trait that triggered it (limit hit →
    the plan that removes that limit; inactivity → the feature they used most)?
 8. **What did we learn last time?** `mkt-ledger recall` — if a similar play failed, what differs?
-9. **Channel choice** — why SMS vs email for this moment? SMS only for time-sensitive or
-   high-intent moments; email for anything needing detail.
-10. **What would make this a mistake?** Fatigue (cohorts.sql #6), wrong timezone, a contact
-    already converted, a price that changed.
+9. **Channel choice** — which channel (or both) lands this moment best?
+10. **What would make this a mistake?** A wrong variable, a price that changed, a link to a
+    page that moved, an offer that no longer exists.
 
 Rewrite until every answer is concrete. Keep the grill Q&A in the PR/campaign notes.
 

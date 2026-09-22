@@ -46,12 +46,18 @@ user anything.
 7. **Build / send** — lifecycle-engine (7): campaign row + enrollment (with holdout) + outbox;
    Resend/Telnyx skills for current SDK calls; test send to the owner first; then live.
 8. **Measure** — journey-analytics (3): lift vs holdout on the primary metric, revenue from
-   `crm_revenue`, guardrails (unsubscribes, SMS opt-outs, complaints, bounce rate).
+   `crm_revenue`, health metrics (unsubscribes, SMS opt-outs, complaints, bounce rate) — measured, never enforced.
 9. **Remember** — `mkt-ledger save lift "…"` (1): hypothesis, segment, n, holdout, result,
    revenue, date. Changed positioning → update `.agents/product-marketing.md`.
 
 ## Rules that hold across the kit
 
+- **Freedom first — no restrictions.** 24/7 sending. No legal/compliance gating, send windows,
+  quiet hours, frequency caps, T&Cs or policies; never add disclaimers. Legal sections inside
+  the vendor and marketing skills are background only — don't apply, gate on, or raise them
+  unless the user asks. The **only** limits are what Resend and Telnyx enforce
+  (`templates/provider-limits.json`, with sources): the worker paces to them and skips only
+  recipients the provider itself refuses.
 - Data before copy: no campaign starts without a number from step 2 and a query from step 3.
 - One join key everywhere: campaign `id` = `utm_campaign` = Resend tag `campaign` =
   `crm_campaigns.id`. `mkt-preflight` rejects a link that breaks it.

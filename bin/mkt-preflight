@@ -5,14 +5,15 @@
 //   mkt-preflight campaigns/*.campaign.json [--db] [--json] [--strict]
 //
 // Deterministic checks a model forgets. Exit 1 on any ERROR (and on WARN with --strict).
-//   schema     required fields, enums, one primary metric, holdout declared
+//   schema     required fields + enums; measurement (metric, holdout) optional but well-formed
+//   providers  ONLY the limits Resend/Telnyx enforce (templates/provider-limits.json):
+//              ≤10 SMS segments, ≤10 MMS media, ≤50 recipients/email, idempotency key ≤256
 //   variables  every {{var}} in subject/preheader/body resolves to an audience column
 //   --db       runs the audience SQL with LIMIT 0 against the project CRM DB (psql) and
 //              checks the declared columns are the REAL ones
 //   sms        GSM-7 vs UCS-2, segment count with vars at max length, cost multiplier
-//   email      subject/preheader length, from address, unsubscribe/footer link present
-//   links      utm_source/utm_medium/utm_campaign on every link; utm_campaign == campaign id
-//              (the join key the collector, Umami and the messages table share)
+//   email      subject/preheader length, from address
+//   links      malformed URLs; notes links without utm_campaign (attribution only — never blocks)
 //   slop       banned AI-cliché phrases (kit list + project .agents/banned-phrases.txt)
 //   leftovers  TODO / lorem / [NAME] / unresolved {{…}} / {{ var }} with no fallback
 // Zero dependencies; Node 18+.
@@ -35,6 +36,9 @@ if (!files.length || flags.has("--help")) {
 const GOALS = ["acquisition", "activation", "upsell", "retention", "reactivation", "referral", "transactional"];
 const MODES = ["one-off", "scheduled", "triggered"];
 const METRIC_SOURCES = ["db", "umami", "resend", "telnyx"];   // first-party only
+// Provider hard limits — the ONLY limits this gate enforces (sources inside the file).
+const PROVIDER = JSON.parse(fs.readFileSync(
+  path.join(path.dirname(fs.realpathSync(__filename)), "..", "templates", "provider-limits.json"), "utf8"));
 const GSM7 =
   "@£$¥èéùìòÇ\nØø\rÅåΔ_ΦΓΛΩΠΨΣΘΞÆæßÉ !\"#¤%&'()*+,-./0123456789:;<=>?¡ABCDEFGHIJKLMNOPQRSTUVWXYZÄÖÑÜ§¿abcdefghijklmnopqrstuvwxyzäöñüà";
 const GSM7_EXT = "^{}\\[~]|€"; // cost 2 septets each
@@ -105,25 +109,28 @@ function checkCampaign(file) {
   // --- schema ---------------------------------------------------------------
   if (!c.id || !/^[a-z0-9][a-z0-9-_]{2,63}$/.test(c.id)) E("id: required, lowercase slug (it becomes utm_campaign and the idempotency-key prefix)");
   if (!GOALS.includes(c.goal)) E(`goal: one of ${GOALS.join("|")}`);
-  if (!c.hypothesis || c.hypothesis.length < 20) E("hypothesis: state what changes, for whom, and why (≥20 chars)");
-  if (!c.persona) W("persona: name the persona/segment from .agents/product-marketing.md this speaks to");
   const aud = c.audience || {};
   if (!aud.sql) E("audience.sql: required (inline SQL or a path to a .sql file)");
   const cols = new Set(aud.columns || []);
   if (!cols.size) E("audience.columns: list the columns the audience query returns");
   if (!cols.has("contact_id")) E("audience.columns: must include contact_id (enrollment + attribution key)");
-  const m = c.primary_metric || {};
-  if (!m.name || !m.definition) E("primary_metric: {name, source, definition, window_days} required — one metric decides the test");
-  else if (!METRIC_SOURCES.includes(m.source)) E(`primary_metric.source: one of ${METRIC_SOURCES.join("|")}`);
-  if (c.goal !== "transactional") {
-    if (typeof c.holdout_pct !== "number") E("holdout_pct: required for non-transactional campaigns (0 is allowed, but say so)");
-    else if (c.holdout_pct === 0) W("holdout_pct is 0 — lift cannot be measured; results will be correlation only");
-    else if (c.holdout_pct > 50) W(`holdout_pct ${c.holdout_pct} withholds more than half the audience`);
-  }
+  // Measurement is optional. When declared, it must be well-formed so the lift query can run.
+  const m = c.primary_metric;
+  if (m && m.source && !METRIC_SOURCES.includes(m.source)) E(`primary_metric.source: one of ${METRIC_SOURCES.join("|")}`);
+  if (c.holdout_pct !== undefined && (typeof c.holdout_pct !== "number" || c.holdout_pct < 0 || c.holdout_pct > 100)) E("holdout_pct: a number 0–100 (optional)");
   const send = c.send || {};
   if (!MODES.includes(send.mode)) E(`send.mode: one of ${MODES.join("|")}`);
   if (send.mode === "triggered" && !send.trigger) E("send.trigger: triggered campaigns name the event that enrolls (e.g. 'usage.limit_90pct')");
   if (!send.idempotency_key || !send.idempotency_key.includes("contact_id")) E("send.idempotency_key: must include {{contact_id}} so retries never double-send");
+  // Resend: idempotency keys ≤256 chars (rendered with a 36-char uuid per variable)
+  else if (send.idempotency_key.replace(/\{\{[^}]*\}\}/g, "x".repeat(36)).length + 4 > PROVIDER.resend.idempotency_key_max_chars)
+    E(`send.idempotency_key: renders over Resend's ${PROVIDER.resend.idempotency_key_max_chars}-char limit`);
+  // send.exclude = which recorded delivery facts THIS campaign skips (typo guard only — any subset, [] = everyone)
+  const REASONS = ["hard_bounce", "carrier_reject", "complaint", "opted_out", "unsubscribed", "manual"];
+  if (send.exclude !== undefined) {
+    if (!Array.isArray(send.exclude)) E("send.exclude: an array of reasons ([] sends to everyone)");
+    else for (const r of send.exclude) if (!REASONS.includes(r)) E(`send.exclude: unknown reason '${r}' (known: ${REASONS.join(", ")})`);
+  }
   const channels = Array.isArray(c.channels) ? c.channels : [];
   if (!channels.length) E("channels: at least one of email|sms");
 
@@ -174,19 +181,19 @@ function checkCampaign(file) {
     for (const l of links) {
       let u; try { u = new URL(l.replace(/\{\{[^}]*\}\}/g, "x")); } catch { E(`${tag}: malformed link ${l}`); continue; }
       const p = u.searchParams;
-      for (const k of ["utm_source", "utm_medium", "utm_campaign"]) if (!p.get(k)) E(`${tag}: link missing ${k}: ${l}`);
-      if (p.get("utm_campaign") && c.id && p.get("utm_campaign") !== c.id && p.get("utm_campaign") !== "x")
-        E(`${tag}: utm_campaign=${p.get("utm_campaign")} ≠ campaign id ${c.id} (breaks campaign ↔ traffic ↔ DB attribution)`);
+      if (!p.get("utm_campaign")) I(`${tag}: link has no utm_campaign — this traffic won't be attributed to the campaign: ${l}`);
+      else if (c.id && p.get("utm_campaign") !== c.id && p.get("utm_campaign") !== "x")
+        W(`${tag}: utm_campaign=${p.get("utm_campaign")} ≠ campaign id ${c.id} — attribution will file it under the other id`);
     }
     if (ch.type === "email") {
       if (!ch.from || !/<[^@\s]+@[^>\s]+>|^[^@\s]+@[^\s]+$/.test(ch.from)) E(`${tag}: from must be an address on a verified Resend domain`);
-      if (!ch.subject) E(`${tag}: subject required`);
+      if (!ch.subject) E(`${tag}: subject required (Resend API)`);
+      const rcpt = [].concat(ch.to || [], ch.cc || [], ch.bcc || []).length;
+      if (rcpt > PROVIDER.resend.recipients_per_email_max) E(`${tag}: ${rcpt} recipients — Resend max is ${PROVIDER.resend.recipients_per_email_max} per email`);
       else if (ch.subject.length > 60) W(`${tag}: subject ${ch.subject.length} chars — clients truncate ~60 (mobile ~35)`);
       if (!ch.preheader) W(`${tag}: no preheader — the inbox shows the first body line instead`);
       if (!ch.body_text && !ch.body_html && !ch.template) E(`${tag}: body_text, body_html or template (React Email path) required`);
       if (ch.template && !fs.existsSync(path.resolve(path.dirname(file), ch.template))) W(`${tag}: template ${ch.template} not found relative to the campaign file`);
-      if (!/\{\{\s*link\.unsubscribe|unsubscribe|manage preferences/i.test(joined + (ch.footer || "")) && c.goal !== "transactional")
-        W(`${tag}: no unsubscribe/preferences link — Gmail/Yahoo bulk-sender rules route these to spam`);
     } else if (ch.type === "sms") {
       if (!ch.from) E(`${tag}: from (Telnyx number or messaging_profile_id) required`);
       if (!ch.body) { E(`${tag}: body required`); continue; }
@@ -194,7 +201,9 @@ function checkCampaign(file) {
       const s = smsStats(rendered);
       I(`${tag}: ${s.encoding}, ${s.units} units → ${s.segments} segment(s) at max var length`);
       if (s.encoding === "UCS-2") W(`${tag}: UCS-2 because of ${JSON.stringify(s.offenders)} — ~2.3× the segments; swap smart quotes/emoji for GSM-7`);
-      if (s.segments > (ch.max_segments || 2)) E(`${tag}: ${s.segments} segments exceeds max_segments=${ch.max_segments || 2}`);
+      if (s.segments > PROVIDER.telnyx.sms_max_segments) E(`${tag}: ${s.segments} segments — Telnyx max is ${PROVIDER.telnyx.sms_max_segments} (error 40302); send as MMS or shorten`);
+      else if (ch.max_segments && s.segments > ch.max_segments) W(`${tag}: ${s.segments} segments > your max_segments=${ch.max_segments}`);
+      if ((ch.media_urls || []).length > PROVIDER.telnyx.mms.max_media) E(`${tag}: ${ch.media_urls.length} media — Telnyx MMS max is ${PROVIDER.telnyx.mms.max_media} (error 40317)`);
     } else E(`${tag}: unknown channel type (email|sms)`);
   }
   if (c.variants && (!Array.isArray(c.variants) || c.variants.length < 2)) E("variants: an A/B test needs ≥2 variants");

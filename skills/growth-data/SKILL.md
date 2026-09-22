@@ -59,13 +59,14 @@ the rows affected with a `select count(*)` first, run inside a transaction, past
 ## Audience queries (cohorts)
 
 - A read-only `SELECT` returning `contact_id` plus exactly the columns the templates use.
-- Filter reachable contacts in the query (`email_status = 'ok'`, not in `crm_suppressions`),
-  and exclude recent enrollees of the same campaign and fatigued contacts (cohorts.sql #6).
+- The audience is whoever the campaign targets — the kit filters nothing. At send time the
+  worker skips only addresses the providers themselves refuse (Resend's bounce/complaint
+  suppression, Telnyx STOP 40300 / non-routable 40001), which would fail and cost money anyway.
 - Save it as `campaigns/<id>.sql`, declare its columns in the campaign spec, and let
   `mkt-preflight --db` prove the columns are real.
 - `explain_query` any cohort that scans `crm_events` without a time bound.
 - Starting points: `references/cohorts.sql` (churn risk, upsell at 90% limit, activation gap,
-  source quality by revenue, holdout lift, fatigue).
+  source quality by revenue, holdout lift, message volume).
 
 ## Pitfalls
 

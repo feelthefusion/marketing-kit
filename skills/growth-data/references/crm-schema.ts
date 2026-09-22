@@ -34,7 +34,7 @@ export const crmContacts = pgTable("crm_contacts", {
   phoneE164: text("phone_e164"),                   // always E.164; normalize on write
   firstName: text("first_name"),
   lastName: text("last_name"),
-  timezone: text("timezone"),                      // IANA; drives quiet hours + send-time
+  timezone: text("timezone"),                      // IANA; drives send-time
   plan: text("plan").notNull().default("free"),    // mirrored from the app's own billing/orders
   lifecycleStage: text("lifecycle_stage").notNull().default("lead"), // lead|trial|active|at_risk|churned
   traits: jsonb("traits").$type<Record<string, unknown>>().notNull().default({}), // typed via zod at the edge
@@ -142,12 +142,12 @@ export const crmMessages = pgTable("crm_messages", {
   index("crm_messages_contact_idx").on(t.contactId, t.createdAt),
 ]);
 
-// Addresses that must not be retried: hard bounces, complaints, carrier rejections, opt-outs.
-// Deliverability hygiene — sending to these burns sender reputation and money.
+// Delivery facts per address: hard bounces, complaints, carrier rejections, inbound STOP, manual.
+// Pure data — the kit blocks nothing. Each campaign picks which reasons to skip (send.exclude).
 export const crmSuppressions = pgTable("crm_suppressions", {
   channel: channelEnum("channel").notNull(),
   value: text("value").notNull(),           // lower(email) or E.164
-  reason: text("reason").notNull(),         // hard_bounce | complaint | carrier_reject | opted_out | manual
+  reason: text("reason").notNull(),         // hard_bounce | carrier_reject | complaint | opted_out | unsubscribed | manual
   source: text("source").notNull(),         // resend | telnyx | app
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 }, (t) => [uniqueIndex("crm_suppressions_uq").on(t.channel, t.value)]);

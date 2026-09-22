@@ -1,6 +1,6 @@
 ---
 name: lifecycle-engine
-description: "Use when building, changing, or running triggered or automated campaigns, drip sequences, broadcasts, transactional messages, or delivery infrastructure in the app's own code with Resend (email) and Telnyx (SMS): trigger rules, enrollment, holdouts, outbox worker, idempotent sends, scheduling/quiet hours, delivery + inbound webhooks, and test sends. Also for ad-hoc sends through the Resend/Telnyx MCP servers."
+description: "Use when building, changing, or running triggered or automated campaigns, drip sequences, broadcasts, transactional messages, or delivery infrastructure in the app's own code with Resend (email) and Telnyx (SMS): trigger rules, enrollment, holdouts, outbox worker, idempotent sends, scheduling, delivery + inbound webhooks, and test sends. Also for ad-hoc sends through the Resend/Telnyx MCP servers."
 ---
 
 # Lifecycle Engine (triggered + automated delivery, in your own code)
@@ -17,7 +17,7 @@ event (site collector / app code / Resend+Telnyx webhooks) ─▶ crm_events
                      │  rule: SQL cohort or event match (campaign.send.trigger)
                      ▼
           crm_enrollments (variant, holdout)  ── holdout: row, no message
-                     │  step scheduler (delay, quiet hours, only_if)
+                     │  step scheduler (delay, only_if)
                      ▼
           crm_messages  status=queued  idempotency_key UNIQUE    ◀── outbox
                      │  worker: FOR UPDATE SKIP LOCKED, suppression re-check
@@ -39,15 +39,29 @@ holdout), `references/webhooks.ts` (Resend + Telnyx ingest). Schema: growth-data
 - **Idempotency key** = `<campaign>/<contact>/<step>`; unique in the DB and passed to Resend.
   Re-running a job must be safe at every stage.
 - **Render once, store rendered** — the exact body sent lives in `crm_messages.body`.
-- **Holdout at enrollment**, deterministic: `hash(contact_id || campaign_id) % 100 < holdout_pct`.
-- **Re-check at send time** — suppression, `email_status`/`sms_status`, converted-already
-  (exit the enrollment when the primary metric fires), frequency cap.
-- **Timezone-aware scheduling** — `crm_contacts.timezone`; respect the spec's `quiet_hours`.
-- **Provider choice** — Resend single send for triggered 1:1; `POST /emails/batch` (≤100, no
-  attachments/scheduling, atomic) for volume. Telnyx: E.164 numbers on a messaging profile;
-  throughput depends on number type — spread volume over the pool, back off on 429.
+- **24/7, no kit limits.** No send windows, quiet hours, frequency caps or policy filters.
+  The only limits are what Resend and Telnyx enforce, listed with sources in
+  `templates/provider-limits.json` and paced for by the worker:
+  - Resend: 10 req/s per team (no burst; `RESEND_RPS` if yours was raised) · batch ≤100
+    emails = 1 request · ≤50 recipients/email · ≤40 MB attachments · idempotency key ≤256
+    chars, 24h · free plan 100/day (resets 00:00 UTC) + 3,000/month · paid overage stops at 5×.
+  - Telnyx: account 50 SMS/s, 15 MMS/s · per sender toll-free 20/s, short code 1,000/s, US long
+    code = your 10DLC class (`TELNYX_SENDER_MPS`; AT&T TPM + T-Mobile daily brand cap) · queue
+    holds 4h (40318 full) · ≤10 SMS segments (40302) · MMS ≤10 media, ≤1 MB (40317).
+- **Provider refusals** — the worker skips only what the provider itself will refuse: Resend's
+  own suppression (hard bounce, spam complaint) and Telnyx blocks (40300 STOP, 40001/40003/40310).
+  Those would fail and cost money anyway. `send.exclude` overrides the list; `[]` skips nothing.
+- **Provider stops are waited out, not failed** — Resend 429 rate → retry next second; daily quota
+  → held to 00:00 UTC; monthly → next month. Telnyx 429/40318/40011/40016/40018 → backoff;
+  40333 spend limit / 40020 / 40320 → hold 1h.
+- **Holdout (optional)** — only if the campaign sets `holdout_pct`: deterministic
+  `hash(contact_id || campaign_id) % 100 < holdout_pct`, enrollment row with no message.
+- **Provider choice** — email always goes through `POST /emails/batch` (100 per request = 1,000
+  emails/s at the default rate). Telnyx: E.164 numbers on a messaging profile; add numbers to
+  the pool for more SMS throughput.
 - **Webhooks** — verify on the RAW body; update by `provider_message_id`; dedupe by provider
-  event id; hard bounce / complaint / carrier opt-out → `crm_suppressions`.
+  event id; bounces, complaints and inbound STOP/START are recorded in `crm_suppressions` + contact
+  status as data. Nothing is blocked by the kit.
 - **Workers on Railway** — a separate service (or cron service) running the drain loop; watch
   it with the `railway` MCP logs after the first send.
 

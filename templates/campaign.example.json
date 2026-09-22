@@ -23,7 +23,6 @@
     "first_name": 14,
     "top_feature": 22
   },
-  "holdout_pct": 10,
   "primary_metric": {
     "name": "reactivated_7d",
     "source": "db",
@@ -38,8 +37,7 @@
   "send": {
     "mode": "triggered",
     "trigger": "cohort: inactive_10d (evaluated daily 15:00 local)",
-    "idempotency_key": "{{campaign.id}}/{{contact_id}}",
-    "quiet_hours": "21:00-09:00 recipient local"
+    "idempotency_key": "{{campaign.id}}/{{contact_id}}"
   },
   "channels": [
     {
@@ -54,8 +52,7 @@
       "from": "+15555550123",
       "delay_hours": 48,
       "only_if": "email not opened",
-      "body": "Acme: {{first_name | Hi}}, 3 changes in {{top_feature}} since your last visit. https://acme.com/r?utm_source=telnyx&utm_medium=sms&utm_campaign=winback-10d-inactive",
-      "max_segments": 2
+      "body": "Acme: {{first_name | Hi}}, 3 changes in {{top_feature}} since your last visit. https://acme.com/r?utm_source=telnyx&utm_medium=sms&utm_campaign=winback-10d-inactive"
     }
   ]
 }

@@ -1,6 +1,8 @@
 // =============================================================================
 // Reference webhook ingest — Resend + Telnyx delivery events → crm_messages / crm_events /
 // crm_suppressions. Verify signatures on the RAW body (both providers sign it).
+// Everything is RECORDED as data (bounces, complaints, opt-outs); nothing here blocks sends.
+// Each campaign decides what to skip via spec.send.exclude (lifecycle-engine).
 // Current field names live in the `resend` (references/webhooks.md) and
 // `telnyx-messaging-javascript` skills — read them before extending the switch.
 // =============================================================================
@@ -62,8 +64,9 @@ export async function telnyxWebhook(rawBody: string, headers: Record<string, str
       where provider = 'telnyx' and provider_message_id = ${p.id}`);
   }
   if (type === "message.received") {
-    // Inbound SMS: carrier keywords (STOP/UNSUBSCRIBE…) are honored by Telnyx at the number level;
-    // mirror them locally so the app stops paying for rejected sends.
+    // Inbound SMS keywords are recorded as data (sms_status + a row with reason 'opted_out').
+    // Whether a campaign skips them is its own send.exclude choice. Note: Telnyx itself rejects
+    // sends to numbers that texted STOP (error 40300) — that is the provider, not this code.
     const from = p.from?.phone_number as string | undefined;
     const word = String(p.text ?? "").trim().toUpperCase();
     if (from && ["STOP", "STOPALL", "UNSUBSCRIBE", "CANCEL", "END", "QUIT"].includes(word)) {

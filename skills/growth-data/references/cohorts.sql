@@ -12,7 +12,7 @@ with w as (
   group by contact_id)
 select c.id as contact_id, c.email, c.first_name, c.plan, w.recent, w.baseline
 from w join crm_contacts c on c.id = w.contact_id
-where c.plan <> 'free' and w.baseline >= 5 and w.recent <= w.baseline * 0.4 and c.email_status = 'ok';
+where c.plan <> 'free' and w.baseline >= 5 and w.recent <= w.baseline * 0.4;
 
 -- 2. Upsell: hit ≥90% of a plan limit in the last 7 days (event emitted by the app's metering)
 select distinct on (c.id) c.id as contact_id, c.email, c.phone_e164, c.first_name, c.plan,
@@ -45,7 +45,7 @@ select e.variant, e.holdout, count(*) as n,
 from crm_enrollments e where e.campaign_id = :'campaign_id'
 group by 1, 2 order by 2, 1;
 
--- 6. Channel fatigue: contacts messaged ≥3 times in 7 days (exclude from the next send)
+-- 6. Message volume per contact, last 7 days (information only — nothing filters on it)
 select contact_id, count(*) as msgs_7d from crm_messages
 where created_at >= now() - interval '7 days' and status not in ('skipped','failed')
 group by contact_id having count(*) >= 3;
