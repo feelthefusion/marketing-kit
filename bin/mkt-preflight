@@ -17,12 +17,13 @@
 //   leftovers  TODO / lorem / [NAME] / unresolved {{…}} / {{ var }} with no fallback
 // Zero dependencies; Node 18+.
 // =============================================================================
-import fs from "node:fs";
-import path from "node:path";
-import { execFileSync } from "node:child_process";
-import { fileURLToPath } from "node:url";
+"use strict";
+// CommonJS on purpose: an extensionless ESM file only runs on Node 22+ (syntax detection).
+const fs = require("node:fs");
+const path = require("node:path");
+const { execFileSync } = require("node:child_process");
 
-const KIT = path.resolve(path.dirname(fs.realpathSync(fileURLToPath(import.meta.url))), "..");
+const KIT = path.resolve(path.dirname(fs.realpathSync(__filename)), "..");
 const args = process.argv.slice(2);
 const flags = new Set(args.filter((a) => a.startsWith("--")));
 const files = args.filter((a) => !a.startsWith("--"));
