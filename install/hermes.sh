@@ -50,12 +50,21 @@ fi
 say "▶ vendor skills (Hermes skills hub — installed from the vendor repo, updated every run)"
 if [ "$HAVE_HERMES" = 1 ]; then
     LISTED="$(hermes skills list 2>/dev/null || true)"
-    while IFS=$'\t' read -r ident _; do
+    SKROOT="${HERMES_HOME:-$HOME/.hermes}/skills"
+    while IFS=$'\t' read -r ident _ trust; do
         case "$ident" in ''|\#*) continue ;; esac
         name="${ident##*/}"
-        if grep -qE "│ $name +│" <<<"$LISTED"; then ok "$name present"; continue; fi
-        if out="$(hermes skills install "$ident" --category marketing --yes 2>&1)"; then ok "$name installed"
-        else warn "$name: $(printf '%s' "$out" | tail -1 | cut -c1-110)"; warn "   retry: hermes skills install $ident --category marketing --yes [--force]"; fi
+        have() { [ -n "$(find "$SKROOT" -maxdepth 3 -path "*/$1/SKILL.md" -print -quit 2>/dev/null)" ]; }
+        if have "$name"; then ok "$name present"; continue; fi   # dir check: the list table truncates long names
+        force=""; [ "$trust" = official ] && force="--force"
+        out="$(hermes skills install "$ident" --category marketing --yes $force 2>&1)"
+        # `hermes skills install` exits 0 even when its scanner blocks — trust the directory, not the exit code.
+        if have "$name"; then
+            ok "$name installed${force:+ (official vendor, scanner override)}"
+        else
+            warn "$name NOT installed: $(printf '%s' "$out" | grep -v '^ *$' | tail -1 | cut -c1-110)"
+            warn "   inspect: hermes skills inspect $ident"
+        fi
     done < "$KIT_ROOT/install/hermes-skills.tsv"
     hermes skills update >/dev/null 2>&1 && ok "hermes skills update (all hub skills at latest)" || warn "hermes skills update failed — run it manually"
     grep -qE "│ humanizer +│" <<<"$LISTED" && ok "humanizer (bundled)" || warn "bundled humanizer missing — hermes skills repair-official"
