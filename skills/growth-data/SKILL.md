@@ -52,7 +52,7 @@ the rows affected with a `select count(*)` first, run inside a transaction, past
 - **First-party only** — every row comes from the site or its own databases. No third-party
   analytics or billing IDs in the schema.
 - **High volume** — `crm_events` past ~10M rows: BRIN index on `occurred_at`, monthly
-  partitions, and a retention policy for raw `page.viewed` (keep aggregates).
+  partitions; prune old raw `page.viewed` rows whenever storage matters (keep aggregates).
 - **Traits are typed at the edge** — `traits jsonb` is validated by a zod schema in the app
   before write; a template may only use a trait the audience query projects as a column.
 
