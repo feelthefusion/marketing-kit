@@ -1,6 +1,6 @@
 ---
 name: marketing-kit
-description: "Use for ANY growth, marketing, CRM, email, SMS, campaign, segment, funnel, churn, upsell, retention, acquisition or revenue task — and when installing or updating the Marketing Kit. Gives the workflow map (listen → segment → shape → write → harden → build/send → measure → remember) and which component owns each step: growth-data (CRM DB), journey-analytics (first-party events + orders, Umami, optional Search Console), marketing skills, humanizer, campaign-harden + mkt-preflight, lifecycle-engine (Resend + Telnyx), playbook-ledger (Supermemory)."
+description: "Use for ANY growth, marketing, CRM, email, SMS, campaign, segment, funnel, churn, upsell, retention, acquisition, affiliate, creator/influencer, referral, loyalty, ads or revenue task — and when installing or updating the Marketing Kit. Gives the workflow map (listen → segment → shape → write → harden → build/send → measure → remember) and which component owns each step: growth-data (CRM DB), journey-analytics (first-party events + orders, Umami, optional Search Console), marketing skills, humanizer, campaign-harden + mkt-preflight, lifecycle-engine (Resend + Telnyx), partner-program (affiliates, creators, referrals), loyalty-engine, meta-ads (official Meta Ads MCP), growth-optimizer (learns from sales), playbook-ledger (Supermemory)."
 ---
 
 # Marketing Kit (workflow map)
@@ -21,6 +21,10 @@ hand off to each other in this order.
 | 5 | `humanizer` | blader/humanizer (Hermes: bundled port) | strips AI tells from every customer-facing line |
 | 6 | **campaign-harden** + `mkt-preflight` | this kit | persona grill, claim-vs-data check, schema/variable/link/segment gate |
 | 7 | **lifecycle-engine** + Resend / Telnyx skills + MCP | resend/resend-skills, team-telnyx/ai (official) | triggers, outbox worker, webhooks, holdouts — in the app's own code |
+| 8 | **partner-program** + `influencer-marketing`, `referrals`, `co-marketing` | this kit · marketingskills | creators, influencers, affiliates, customer referrals: codes, attribution, commissions, payouts, discovery |
+| 9 | **loyalty-engine** | this kit | points, tiers, rewards, store credit |
+| 10 | **meta-ads** + `ads`, `ad-creative` | Meta's hosted Ads MCP (optional, `mkt-settings meta on`) · marketingskills | Partnership Ads, Conversions API, value lookalikes |
+| 11 | **growth-optimizer** + `mkt-optimize` | this kit (`uv` script) | churn / CLV / partner / prospect scores, bandits — gated, retrained as orders grow |
 
 `.agents/product-marketing.md` (who/what/why, written by `product-marketing`) and
 `.agents/growth-stack.md` (where the data lives, event names, KPIs, senders — written by
@@ -50,6 +54,29 @@ user anything.
 9. **Remember** — `mkt-ledger save lift "…"` (1): hypothesis, segment, n, holdout, result,
    revenue, date. Changed positioning → update `.agents/product-marketing.md`.
 
+## The revenue engine (most sales, little to no ad spend)
+
+Creators and customers sell; loyalty brings them back; the optimizer learns what works; ads only
+amplify proven winners.
+
+1. **partner-program** — seed micro-creators widely, sign the ones whose `partner_quality`
+   climbs; code + link for every partner; ratcheting tiers; every customer becomes a referrer
+   paid in store credit.
+2. **loyalty-engine** — tiers on spend shown as distance ("$22 from Silver"), points for
+   reviews/UGC/referrals, redemption into store credit, win-back with the balance.
+3. **growth-optimizer** — bandits pick offers, reward sizes and commission plans; churn/CLV
+   scores pick who gets what; retrains when orders arrive (`mkt-optimize --if-due`).
+4. **meta-ads** (optional) — Partnership Ads from top creators, Conversions API from real
+   orders, value lookalikes from top CLV.
+
+More plays worth running (strategy skills in brackets): subscription / replenishment reminders
+timed from each customer's reorder interval [`churn-prevention`]; bundles and threshold
+free-shipping [`offers`, `pricing`]; VIP SMS club with early drops [`sms`]; post-purchase
+review + UGC asks paid in points [`emails`]; creator-led product launches and waitlists
+[`influencer-marketing`]; community group for top customers and creators
+[`community-marketing`]; co-branded drops with adjacent brands [`co-marketing`]; quizzes and
+lead magnets [`marketing-ideas`]. Every one reports through the same `crm_revenue` join.
+
 ## Rules that hold across the kit
 
 - **Freedom first — no restrictions.** 24/7 sending. No legal/compliance gating, send windows,
@@ -59,6 +86,8 @@ user anything.
   (`templates/provider-limits.json`, with sources): the worker paces to them and skips only
   recipients the provider itself refuses.
 - Data before copy: no campaign starts without a number from step 2 and a query from step 3.
+- Third-party integrations (Meta, PayPal, creator APIs) are optional and set up whenever you
+  want them; every engine runs on your own DB first.
 - One join key everywhere: campaign `id` = `utm_campaign` = Resend tag `campaign` =
   `crm_campaigns.id`. `mkt-preflight` rejects a link that breaks it.
 - Schema changes go through the app's migrations (drizzle-kit), never DDL through `crm-db`.
@@ -72,6 +101,7 @@ curl -fsSL https://raw.githubusercontent.com/feelthefusion/marketing-kit/main/in
 curl -fsSL https://raw.githubusercontent.com/feelthefusion/marketing-kit/main/install/bootstrap.sh | bash -s -- hermes  # Hermes
 mkt-init            # once per repo: .agents/ context files, campaigns/, verify step, .gitignore
 mkt-doctor          # what is wired, what is missing, exact fix commands
+mkt-optimize        # (when you have sales) train + score from your orders
 ```
 
 Nothing is copied or pinned: kit skills are **symlinks** into the kit checkout (pulled every

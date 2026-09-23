@@ -93,7 +93,23 @@ MKT_UPDATE=off                 # disable
 | 5 | Humanizer | [blader/humanizer](https://github.com/blader/humanizer) (Hermes: bundled port) | strips AI tells from customer-facing copy |
 | 6 | **campaign-harden** + `mkt-preflight` | this kit | persona grill with evidence, claim check, and a deterministic gate for schema, variables, UTMs and SMS segments |
 | 7 | **lifecycle-engine** + Resend + Telnyx | [resend/resend-skills](https://github.com/resend/resend-skills) (official, hosted MCP) · [team-telnyx/ai](https://github.com/team-telnyx/ai) (official) + `@telnyx/mcp` | triggers, enrollment with holdout, idempotent outbox, verified webhooks, all in your own code |
-| — | **marketing-kit** | this kit | the workflow map; loads on any growth/CRM/email/SMS task |
+| 8 | **partner-program** | this kit + `influencer-marketing`, `referrals`, `co-marketing` | creators, influencers, affiliates, customer referrals: codes + `?ref` links, attribution, tiered commissions, clawbacks, payouts, creator discovery |
+| 9 | **loyalty-engine** | this kit | points, tiers on 12-month spend, rewards, store credit, tier-progress nudges |
+| 10 | **meta-ads** | Meta's official hosted Ads MCP (optional) + `ads`, `ad-creative` | Partnership Ads from top creators, Conversions API from your orders, value lookalikes |
+| 11 | **growth-optimizer** + `mkt-optimize` | this kit (`uv` script, scikit-learn) | churn / CLV / partner / prospect scores and bandits that learn from your sales |
+| — | **marketing-kit** | this kit | the workflow map; loads on any growth/CRM/email/SMS/partner/loyalty task |
+
+### The revenue engine: creators, referrals and loyalty first, ads second
+
+| Piece | What you get | Third-party setup |
+|---|---|---|
+| Partner program | one engine for creators, affiliates, ambassadors and referring customers. Typed codes beat cookies, repeat orders earn recurring credit, tier rates apply at order time, refunds claw back proportionally, commissions wait out a hold. Payouts: store credit (instant), PayPal + Venmo (Payouts API, idempotent batch), Cash App + Zelle (a pay sheet with prefilled Cash App links, then `markPaid`) | none to start; PayPal, YouTube, Instagram and TikTok One keys whenever you want those pieces |
+| Loyalty | append-only points + store-credit ledgers, tiers as a live view, rewards as rows, points for reviews/UGC/referrals, optional expiry | none |
+| Growth optimizer | scores in `crm_scores` that every segment can JOIN; each model must beat a transparent baseline on held-out time or the baseline is written; bandits (value-weighted Thompson sampling) for offers, rewards and commission plans | none (`uv`) |
+| Meta ads | the official MCP with read + write, Conversions API reference | optional: `META_APP_ID`, then `mkt-settings meta on` |
+
+The optimizer retrains when orders arrive, not on a clock: `mkt-optimize --if-due` whenever you
+like, or `optimize.py --listen` on Railway (a Postgres NOTIFY trigger wakes it on each new order).
 
 ### Analytics: first-party by design
 
@@ -131,15 +147,15 @@ mkt-preflight campaigns/winback.campaign.json --db
 
 It errors when:
 - a `{{var}}` isn't a column the audience query returns (`--db` runs the SQL with `LIMIT 0` and checks the real columns)
-- a link is missing `utm_*`, or `utm_campaign ≠ id`
-- an SMS goes over Telnyx's 10-segment limit at maximum variable length (GSM-7/UCS-2 aware)
-- the audience SQL isn't a SELECT
+- the audience SQL isn't a read-only SELECT, or a link is malformed
 - placeholders are left over (`TODO`, `[FIRST NAME]`)
-- there's no primary metric, no declared holdout, or no idempotency key containing `{{contact_id}}`
+- the idempotency key doesn't contain `{{contact_id}}`, or renders over Resend's 256 characters
+- a provider limit would be hit: Telnyx's 10 segments (40302) or 10 MMS files (40317), Resend's 50 recipients
 
 It warns on slop phrases (kit list + your `.agents/banned-phrases.txt`), long subjects, a
-missing preheader, UCS-2 characters and a 0% holdout. `--strict` turns warnings into errors.
-`mkt-init` adds it to the Starter Kit's `verify.sh`, so a broken campaign blocks the agent's turn.
+missing preheader, UCS-2 characters and a `utm_campaign` that doesn't match the id. A link with
+no `utm_campaign` is a note (that traffic just won't be attributed). `--strict` turns warnings
+into errors. `mkt-init` adds it to the Starter Kit's `verify.sh`, so a broken campaign blocks the agent's turn.
 
 ## Your settings
 
@@ -147,6 +163,7 @@ missing preheader, UCS-2 characters and a 0% holdout. `--strict` turns warnings 
 mkt-settings                 # show switches: core (always on) + optional sources
 mkt-settings gsc on          # Search Console on: registers the MCP in Claude Code + Hermes
 mkt-settings gsc off         # off: unregisters it everywhere
+mkt-settings meta on         # Meta Ads MCP (official, hosted; needs META_APP_ID) — optional, later
 ```
 Switches live in `~/.config/marketing-kit/settings.env`. Secrets stay separate, in `secrets.env`.
 
@@ -187,15 +204,21 @@ To use a read-only DB role (recommended), run the SQL in
 
 ```
 skills/            marketing-kit · growth-data · journey-analytics · campaign-harden · lifecycle-engine · playbook-ledger
+                   partner-program · loyalty-engine · growth-optimizer · meta-ads
   growth-data/references/     crm-schema.ts (Drizzle) · cohorts.sql · readonly-role.sql
   journey-analytics/references/ first-party-tracking.ts · analytics.sql · umami.md · search-console.md
   lifecycle-engine/references/ outbox-worker.ts · webhooks.ts
-bin/               mkt-mcp · mkt-preflight · mkt-ledger · mkt-doctor · mkt-settings · mkt-umami
+  partner-program/references/  partner-tracking.ts · partner.sql · payouts.ts · creator-discovery.ts
+  loyalty-engine/references/   loyalty.sql · loyalty.ts
+  growth-optimizer/            scripts/optimize.py · references/bandit.ts · references/optimizer.sql
+  meta-ads/references/         meta-capi.ts
+bin/               mkt-mcp · mkt-preflight · mkt-ledger · mkt-doctor · mkt-settings · mkt-umami · mkt-update · mkt-webhooks · mkt-optimize
 install/           bootstrap.sh · install.sh (Claude Code) · hermes.sh · init-project.sh (mkt-init)
                    claude-plugins.tsv · hermes-skills.tsv   ← the vendor manifest
 templates/         campaign.example.json · secrets.env.example · marketing-kit.env · banned-phrases.txt
 tests/run.sh       preflight, DB resolution, switches, Umami, mkt-init idempotency, verify gating, ledger,
-                   schema typecheck, and every analytics/cohort query on a real seeded Postgres
+                   schema typecheck, and every analytics/cohort query on a real seeded Postgres;
+                   outbox worker, partner/loyalty money paths (mock PayPal), bandit, optimizer on synthetic history
 ```
 
 ## Verify

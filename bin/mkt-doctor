@@ -16,7 +16,7 @@ has()  { [ -f "$SECRETS" ] && grep -qE "^$1=.+" "$SECRETS"; }
 echo "── Marketing Kit doctor ($(git -C "$KIT_ROOT" rev-parse --short HEAD 2>/dev/null || echo '?'))"
 echo "▶ machine"
 for t in node uvx railway psql; do command -v $t >/dev/null 2>&1 && pass "$t" || gap "$t missing" "re-run the kit installer (psql: brew install libpq)"; done
-for b in mkt-mcp mkt-ledger mkt-preflight mkt-init mkt-settings mkt-umami mkt-update mkt-webhooks; do command -v $b >/dev/null 2>&1 && pass "$b on PATH" || gap "$b not on PATH" "export PATH=\"\$HOME/.local/bin:\$PATH\""; done
+for b in mkt-mcp mkt-ledger mkt-preflight mkt-init mkt-settings mkt-umami mkt-update mkt-webhooks mkt-optimize; do command -v $b >/dev/null 2>&1 && pass "$b on PATH" || gap "$b not on PATH" "export PATH=\"\$HOME/.local/bin:\$PATH\""; done
 # living updates: the session-start hook is what keeps every component current
 grep -q "mkt-update --hook" "$HOME/.claude/settings.json" 2>/dev/null && pass "Claude Code SessionStart → mkt-update (living updates)" \
     || gap "Claude Code SessionStart hook missing" "re-run the installer (install/install.sh)"
@@ -39,6 +39,12 @@ if [ "${GSC:-off}" = on ]; then
     { has GOOGLE_APPLICATION_CREDENTIALS || has GSC_OAUTH_CLIENT_SECRETS_FILE; } && pass "Search Console ON + credentials" \
         || gap "Search Console ON but no credentials" "GOOGLE_APPLICATION_CREDENTIALS in $SECRETS, then mkt-settings apply"
 else echo "  · Search Console off (optional — mkt-settings gsc on)"; fi
+# Optional integrations — configure whenever you're ready; the skills work without them.
+# (PayPal, Conversions API and creator-API keys are APP env vars on Railway, not kit secrets.)
+META="$(grep -E '^MKT_META=' "$HOME/.config/marketing-kit/settings.env" 2>/dev/null | cut -d= -f2)"
+[ "${META:-off}" = on ] && { has META_APP_ID && pass "Meta Ads MCP ON + META_APP_ID" || gap "Meta Ads ON but META_APP_ID empty" "add it to $SECRETS, then: mkt-settings apply"; } \
+                        || echo "  · Meta Ads off (optional — skill meta-ads → Setup, then mkt-settings meta on)"
+command -v uv >/dev/null 2>&1 && pass "uv (growth-optimizer)" || echo "  · uv missing — needed only for mkt-optimize"
 "$KIT_ROOT/bin/mkt-ledger" doctor >/dev/null 2>&1 && pass "Supermemory ledger reachable" || gap "Supermemory ledger unreachable" "launchctl kickstart -k gui/\$(id -u)/com.supermemory.local  (or run supermemory-server)"
 
 echo "▶ hosts"

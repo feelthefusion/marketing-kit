@@ -1,5 +1,5 @@
 {
-  "_comment": "The ONLY limits in Marketing Kit: the ones Resend and Telnyx enforce themselves. No kit caps, windows or policies. Account-specific values (your Resend rate, your 10DLC class) override via env. Re-verify against the sources when a provider changes plans — mkt-doctor --live prints them.",
+  "_comment": "The ONLY limits in Marketing Kit: the ones each provider enforces itself (Resend, Telnyx, and — when you set them up — PayPal Payouts, YouTube, TikTok One, Meta). No kit caps, windows or policies. Account-specific values (your Resend rate, your 10DLC class) override via env. Re-verify against the sources when a provider changes plans — mkt-doctor --live prints them.",
   "fetched": "2026-09-22",
   "resend": {
     "sources": [
@@ -14,14 +14,27 @@
     "rate_limit_scope": "per team (all API keys share it)",
     "batch_max_emails": 100,
     "batch_counts_as_requests": 1,
-    "batch_excludes": ["attachments", "scheduled_at"],
+    "batch_excludes": [
+      "attachments",
+      "scheduled_at"
+    ],
     "recipients_per_email_max": 50,
     "attachments_total_max_mb": 40,
     "idempotency_key_max_chars": 256,
     "idempotency_window_hours": 24,
     "quota": {
-      "free": { "per_day": 100, "per_month": 3000, "day_resets": "00:00 UTC", "marketing_contacts": 1000, "domains": 3 },
-      "paid": { "per_day": null, "per_month": "plan tier", "overage_hard_stop": "5x monthly quota" },
+      "free": {
+        "per_day": 100,
+        "per_month": 3000,
+        "day_resets": "00:00 UTC",
+        "marketing_contacts": 1000,
+        "domains": 3
+      },
+      "paid": {
+        "per_day": null,
+        "per_month": "plan tier",
+        "overage_hard_stop": "5x monthly quota"
+      },
       "counts": "sent + received; each To/CC/BCC recipient counts as one email"
     },
     "errors": {
@@ -38,7 +51,11 @@
       "https://developers.telnyx.com/docs/messaging/messages/message-encoding/index",
       "https://developers.telnyx.com/docs/messaging/messages/error-codes"
     ],
-    "account_mps": { "sms": 50, "mms": 15, "rcs": 1 },
+    "account_mps": {
+      "sms": 50,
+      "mms": 15,
+      "rcs": 1
+    },
     "sender_mps": {
       "toll_free": 20,
       "short_code": 1000,
@@ -47,17 +64,113 @@
       "long_code_us": "set by your 10DLC campaign class (AT&T TPM) — put yours in TELNYX_SENDER_MPS"
     },
     "sender_mps_env": "TELNYX_SENDER_MPS",
-    "att_10dlc_sms_tpm": { "A/B (score 75-100)": 4500, "C/D (50-74)": 2400, "E/F (1-49)": 240, "T low-volume": 75, "W sole-prop": 15 },
-    "tmobile_daily_cap_per_brand": { "top 75-100": 200000, "high_mid 50-74": 40000, "low_mid 25-49": 10000, "low 1-24": 2000, "sole_prop": 1000 },
-    "queue": { "holds_hours": 4, "max_length": "sender MPS × 14,400", "full_error": 40318, "expired_error": 40014 },
+    "att_10dlc_sms_tpm": {
+      "A/B (score 75-100)": 4500,
+      "C/D (50-74)": 2400,
+      "E/F (1-49)": 240,
+      "T low-volume": 75,
+      "W sole-prop": 15
+    },
+    "tmobile_daily_cap_per_brand": {
+      "top 75-100": 200000,
+      "high_mid 50-74": 40000,
+      "low_mid 25-49": 10000,
+      "low 1-24": 2000,
+      "sole_prop": 1000
+    },
+    "queue": {
+      "holds_hours": 4,
+      "max_length": "sender MPS × 14,400",
+      "full_error": 40318,
+      "expired_error": 40014
+    },
     "sms_max_segments": 10,
-    "segment_chars": { "gsm7_single": 160, "gsm7_multi": 153, "ucs2_single": 70, "ucs2_multi": 67 },
-    "mms": { "max_media": 10, "max_total_mb": 1 },
+    "segment_chars": {
+      "gsm7_single": 160,
+      "gsm7_multi": 153,
+      "ucs2_single": 70,
+      "ucs2_multi": 67
+    },
+    "mms": {
+      "max_media": 10,
+      "max_total_mb": 1
+    },
     "errors": {
-      "retry_backoff": [40006, 40008, 40011, 40016, 40018, 40318, 429],
-      "hold_then_retry": [40002, 40020, 40320, 40333],
-      "permanent": [40001, 40003, 40010, 40300, 40301, 40302, 40304, 40305, 40308, 40309, 40310, 40314, 40316, 40317, 40322, 40325, 40329],
-      "provider_blocks_recipient": { "40300": "recipient texted STOP — Telnyx refuses until they text START", "40001": "not routable (landline)", "40310": "invalid number" }
+      "retry_backoff": [
+        40006,
+        40008,
+        40011,
+        40016,
+        40018,
+        40318,
+        429
+      ],
+      "hold_then_retry": [
+        40002,
+        40020,
+        40320,
+        40333
+      ],
+      "permanent": [
+        40001,
+        40003,
+        40010,
+        40300,
+        40301,
+        40302,
+        40304,
+        40305,
+        40308,
+        40309,
+        40310,
+        40314,
+        40316,
+        40317,
+        40322,
+        40325,
+        40329
+      ],
+      "provider_blocks_recipient": {
+        "40300": "recipient texted STOP — Telnyx refuses until they text START",
+        "40001": "not routable (landline)",
+        "40310": "invalid number"
+      }
     }
+  },
+  "paypal_payouts": {
+    "sources": [
+      "https://developer.paypal.com/docs/payouts/standard/integrate-api/",
+      "https://developer.paypal.com/docs/api/payments.payouts-batch/v1/"
+    ],
+    "max_items_per_call": 15000,
+    "sender_batch_id_dedupe_days": 30,
+    "retry": "on HTTP 5xx retry with the SAME sender_batch_id (never a new one)",
+    "venmo": "recipient_type PHONE (US mobile) + recipient_wallet VENMO; note is required"
+  },
+  "youtube_data_api": {
+    "sources": [
+      "https://developers.google.com/youtube/v3/getting-started#quota"
+    ],
+    "units_per_day": 10000,
+    "cost_search_list": 100,
+    "cost_channels_list": 1,
+    "search_max_results": 50
+  },
+  "tiktok_one_creator_discover": {
+    "sources": [
+      "https://business-api.tiktok.com/portal/docs/discover-tto-creators/v1.3"
+    ],
+    "page_size_max": 200,
+    "keyword_search_max_chars": 100
+  },
+  "meta": {
+    "sources": [
+      "https://developers.facebook.com/docs/graph-api/overview/rate-limiting/",
+      "https://developers.facebook.com/docs/marketing-api/conversions-api/"
+    ],
+    "graph_version_default": "v26.0",
+    "graph_version_env": "META_GRAPH_VERSION",
+    "rate_limits": "Business Use Case limits per ad account/app, reported in the X-Business-Use-Case-Usage header; back off when it nears 100%",
+    "ad_policies": "Meta reviews every ad against its own advertising standards; rejected ads are a provider limit"
   }
 }

@@ -4,12 +4,13 @@
 #
 #   mkt-settings                      show every switch and whether it is live
 #   mkt-settings gsc   on|off         Google Search Console MCP (optional, default off)
+#   mkt-settings meta  on|off         Meta Ads MCP — official, hosted (read + write campaigns/budgets)
 #   mkt-settings apply [claude|hermes] re-sync MCP registrations to the switches (installers call this)
 #
 # File: ~/.config/marketing-kit/settings.env  (plain KEY=on|off — edit by hand if you like, then
 # run `mkt-settings apply`). Secrets never go here; they live in secrets.env next to it.
 # Core tracking is always first-party (your site → your Postgres). These switches only add or
-# remove OPTIONAL read-only sources; turning one off unregisters its MCP server everywhere.
+# remove OPTIONAL sources/tools; turning one off unregisters its MCP server everywhere.
 # Umami is not a switch: it is core (deploy with `mkt-umami deploy`).
 # =============================================================================
 set -uo pipefail
@@ -20,12 +21,16 @@ MKT_MCP="$HOME/.local/bin/mkt-mcp"
 [ -x "$MKT_MCP" ] || MKT_MCP="$(cd "$(dirname "$(readlink -f "$0" 2>/dev/null || echo "$0")")" && pwd)/mkt-mcp"
 
 # name → settings key, description, secrets it needs (any one satisfies), hermes timeout
-FEATURES="gsc"   # Umami is core (always on) — see mkt-umami
-key_of()   { case "$1" in gsc) echo MKT_GSC ;; esac; }
+FEATURES="gsc meta"   # Umami is core (always on) — see mkt-umami
+META_MCP_URL="https://mcp.facebook.com/ads"
+META_REDIRECT_PORT="${MKT_META_REDIRECT_PORT:-27890}"   # Hermes OAuth callback: http://localhost:27890/callback
+key_of()   { case "$1" in gsc) echo MKT_GSC ;; meta) echo MKT_META ;; esac; }
 desc_of()  { case "$1" in
     gsc)   echo "Google Search Console — search queries, impressions, CTR, position (read-only)" ;;
+    meta)  echo "Meta Ads (Facebook/Instagram) — official hosted MCP: read, create, edit, pause, budgets" ;;
     esac; }
-needs_of() { case "$1" in gsc) echo "GOOGLE_APPLICATION_CREDENTIALS GSC_OAUTH_CLIENT_SECRETS_FILE" ;; esac; }
+needs_of() { case "$1" in gsc) echo "GOOGLE_APPLICATION_CREDENTIALS GSC_OAUTH_CLIENT_SECRETS_FILE" ;; meta) echo "META_APP_ID" ;; esac; }
+secret_val() { [ -n "${!1:-}" ] && { printf '%s' "${!1}"; return; }; [ -f "$SECRETS" ] && grep -E "^$1=" "$SECRETS" | tail -1 | cut -d= -f2- | tr -d "\"' "; }
 
 say()  { printf '%s\n' "$*"; }
 ok()   { printf '  ✓ %s\n' "$*"; }
@@ -38,6 +43,7 @@ ensure_file() {
 # Marketing Kit feature switches — on|off. Change with `mkt-settings <feature> on|off`
 # (or edit, then `mkt-settings apply`). Core tracking is always first-party.
 MKT_GSC=off
+MKT_META=off
 EOF
 }
 get() { local v=""; [ -f "$SETTINGS" ] && v="$(grep -E "^$1=" "$SETTINGS" | tail -1 | cut -d= -f2- | tr -d "\"' ")"; echo "${v:-off}"; }
@@ -52,8 +58,31 @@ creds_ok() { local k; for k in $(needs_of "$1"); do has_secret "$k" && return 0;
 
 find_claude() { command -v claude 2>/dev/null || { [ -x "$HOME/.claude/local/claude" ] && echo "$HOME/.claude/local/claude"; }; }
 
+apply_meta() {  # remote HTTP + OAuth (Meta hosts it; nothing runs locally). App ID is public, not a secret.
+    local host="$1" state; state="$(get MKT_META)"
+    local CL id; CL="$(find_claude || true)"; id="$(secret_val META_APP_ID)"
+    if [ "$host" != hermes ] && [ -n "$CL" ]; then
+        "$CL" mcp remove -s user meta-ads >/dev/null 2>&1 || true
+        if [ "$state" = on ] && [ -n "$id" ]; then
+            "$CL" mcp add -s user --transport http --client-id "$id" meta-ads "$META_MCP_URL" >/dev/null 2>&1 \
+                && ok "claude: meta-ads registered — first use: /mcp → meta-ads → Authenticate" || warn "claude: meta-ads add failed"
+        elif [ "$state" = on ]; then warn "claude: meta is ON but META_APP_ID is missing from $SECRETS"
+        else ok "claude: meta-ads off (unregistered)"; fi
+    fi
+    if [ "$host" != claude ] && command -v hermes >/dev/null 2>&1; then
+        if [ "$state" = on ] && [ -n "$id" ]; then
+            hermes config set mcp_servers.meta-ads "{\"url\": \"$META_MCP_URL\", \"auth\": \"oauth\", \"timeout\": 180, \"oauth\": {\"client_id\": \"$id\", \"redirect_host\": \"localhost\", \"redirect_port\": $META_REDIRECT_PORT}}" >/dev/null 2>&1 \
+                && ok "hermes: meta-ads registered — sign in once: hermes mcp login meta-ads" || warn "hermes: meta-ads config set failed"
+        else
+            hermes mcp remove meta-ads </dev/null >/dev/null 2>&1 || true
+            [ "$state" = on ] && warn "hermes: meta is ON but META_APP_ID is missing from $SECRETS" || ok "hermes: meta-ads off (unregistered)"
+        fi
+    fi
+}
+
 apply_one() {  # apply_one <feature> <host|all>
     local f="$1" host="$2" state; state="$(get "$(key_of "$f")")"
+    [ "$f" = meta ] && { apply_meta "$host"; return; }
     local CL; CL="$(find_claude || true)"
     if [ "$host" != hermes ] && [ -n "$CL" ]; then
         "$CL" mcp remove -s user "$f" >/dev/null 2>&1 || true
@@ -85,7 +114,7 @@ show() {
         local cr="credentials ✓"; creds_ok "$f" || cr="needs $(needs_of "$f" | sed 's/ / or /')"
         printf '  %-6s %-3s  %s\n         %s\n' "$f" "$st" "$(desc_of "$f")" "$cr"
     done
-    say "Change: mkt-settings gsc on|off   (restart Claude Code / start a new Hermes session after)"
+    say "Change: mkt-settings <gsc|meta> on|off   (restart Claude Code / start a new Hermes session after)"
 }
 
 case "${1:-show}" in
@@ -94,13 +123,14 @@ case "${1:-show}" in
         ensure_file; host="${2:-all}"
         case "$host" in all|claude|hermes) ;; *) die "apply [claude|hermes]" ;; esac
         for f in $FEATURES; do apply_one "$f" "$host"; done ;;
-    gsc)
+    gsc|meta)
         f="$1"; v="${2:-}"
         case "$v" in on|off) ;; *) die "usage: mkt-settings $f on|off   (now: $(get "$(key_of "$f")"))" ;; esac
         set_key "$(key_of "$f")" "$v"
         say "$f → $v"
         apply_one "$f" all
         [ "$v" = on ] && [ "$f" = gsc ]   && say "  setup: skill journey-analytics → references/search-console.md"
+        [ "$v" = on ] && [ "$f" = meta ]  && say "  setup: skill meta-ads → Setup (Meta app ID, OAuth redirect http://localhost:$META_REDIRECT_PORT/callback)"
         say "  restart Claude Code / start a new Hermes session to pick it up" ;;
     -h|--help) sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//' ;;
     *) die "unknown '$1' — try: mkt-settings --help" ;;

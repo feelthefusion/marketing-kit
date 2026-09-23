@@ -13,7 +13,7 @@
 MKT_BIN="$HOME/.local/bin"
 MKT_CONF="$HOME/.config/marketing-kit"
 MKT_SECRETS="$MKT_CONF/secrets.env"
-KIT_SKILLS="marketing-kit growth-data journey-analytics campaign-harden lifecycle-engine playbook-ledger"
+KIT_SKILLS="marketing-kit growth-data journey-analytics campaign-harden lifecycle-engine playbook-ledger partner-program loyalty-engine growth-optimizer meta-ads"
 
 say()  { printf '%s\n' "$*"; }
 ok()   { printf '  · %s ✓\n' "$*"; }
@@ -42,11 +42,11 @@ link_skill() {  # link_skill <src-dir> <dst-dir>
 link_bins() {  # $1 = kit root
     mkdir -p "$MKT_BIN"
     local b
-    for b in mkt-mcp mkt-ledger mkt-preflight mkt-doctor mkt-settings mkt-umami mkt-update mkt-webhooks; do
+    for b in mkt-mcp mkt-ledger mkt-preflight mkt-doctor mkt-settings mkt-umami mkt-update mkt-webhooks mkt-optimize; do
         chmod +x "$1/bin/$b"; ln -sfn "$1/bin/$b" "$MKT_BIN/$b"
     done
     chmod +x "$1/install/init-project.sh"; ln -sfn "$1/install/init-project.sh" "$MKT_BIN/mkt-init"
-    ok "mkt-mcp mkt-ledger mkt-preflight mkt-doctor mkt-settings mkt-umami mkt-update mkt-webhooks mkt-init → $MKT_BIN"
+    ok "mkt-mcp mkt-ledger mkt-preflight mkt-doctor mkt-settings mkt-umami mkt-update mkt-webhooks mkt-optimize mkt-init → $MKT_BIN"
     case ":$PATH:" in *":$MKT_BIN:"*) ;; *) warn "$MKT_BIN is not on PATH — add: export PATH=\"\$HOME/.local/bin:\$PATH\"" ;; esac
 }
 

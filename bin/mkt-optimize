@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+# =============================================================================
+# Marketing Kit — growth-optimizer runner (skill growth-optimizer).
+#
+#   mkt-optimize [project-dir]            train + score now
+#   mkt-optimize --if-due [project-dir]   only if enough new orders arrived (session hook uses this)
+#   mkt-optimize --report [project-dir]   last runs + validation metrics, writes nothing
+#
+# DB: OPTIMIZER_DATABASE_URL, else CRM_DATABASE_URL / DATABASE_PUBLIC_URL / DATABASE_URL from the
+# project's .agents/marketing-kit.env, .env.local, .env (never *.railway.internal — unreachable
+# from a laptop). Needs write on crm_scores / crm_model_runs / crm_arms* (optimizer.sql has a role).
+# Always runs the kit's current optimize.py through uv, so a kit update is an optimizer update.
+# =============================================================================
+set -uo pipefail
+self="$(readlink -f "$0" 2>/dev/null || python3 -c 'import os,sys;print(os.path.realpath(sys.argv[1]))' "$0")"
+KIT="$(cd "$(dirname "$self")/.." && pwd)"
+SCRIPT="$KIT/skills/growth-optimizer/scripts/optimize.py"
+die() { printf 'mkt-optimize: %s\n' "$*" >&2; exit 1; }
+
+flags=(); dir=""
+for a in "$@"; do case "$a" in --if-due|--report) flags+=("$a") ;; -h|--help) sed -n '2,13p' "$self" | sed 's/^# \{0,1\}//'; exit 0 ;; *) dir="$a" ;; esac; done
+dir="$(cd "${dir:-$PWD}" 2>/dev/null && pwd)" || die "no such dir"
+
+dotenv_get() { [ -f "$1" ] || return 1; local v; v="$(grep -E "^(export )?$2=" "$1" | tail -1 | sed -E "s/^(export )?$2=//; s/^[\"']//; s/[\"']$//")"; [ -n "$v" ] && printf '%s' "$v"; }
+url="${OPTIMIZER_DATABASE_URL:-}"
+if [ -z "$url" ]; then
+    for k in OPTIMIZER_DATABASE_URL CRM_DATABASE_URL DATABASE_PUBLIC_URL DATABASE_URL; do
+        for f in "$dir/.agents/marketing-kit.env" "$dir/.env.local" "$dir/.env"; do
+            v="$(dotenv_get "$f" "$k")" && [[ "$v" != *".railway.internal"* ]] && { url="$v"; break 2; }
+        done
+    done
+fi
+[ -n "$url" ] || die "no database URL for $dir (set OPTIMIZER_DATABASE_URL in $dir/.agents/marketing-kit.env)"
+command -v uv >/dev/null 2>&1 || die "uv not found — https://docs.astral.sh/uv/"
+OPTIMIZER_DATABASE_URL="$url" exec uv run -q --script "$SCRIPT" "${flags[@]}"

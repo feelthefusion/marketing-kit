@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Marketing Kit — self-test.  bash tests/run.sh      (no network needed except the optional drizzle typecheck)
 set -uo pipefail
+export USER="${USER:-$(id -un)}"   # node-postgres defaults the DB user to $USER (unset in bare containers)
 KIT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PF="node $KIT/bin/mkt-preflight"
 T="$(mktemp -d "${TMPDIR:-/tmp}/mkt-test.XXXXXX")"; trap 'rm -rf "$T"' EXIT
@@ -158,7 +159,7 @@ if [ "${MKT_TEST_SQL:-1}" = 1 ] && command -v createdb >/dev/null && command -v 
         cp "$KIT/skills/lifecycle-engine/references/outbox-worker.ts" "$W/ref/"
         printf 'import { drizzle } from "drizzle-orm/node-postgres";\nexport const db = drizzle(process.env.DATABASE_URL!);\n' > "$W/db.ts"
         cp "$KIT/tests/fixtures/worker-e2e.ts" "$W/"
-        if (cd "$D" && npm i -s resend@latest telnyx@latest pg @types/node typescript@latest tsx >/dev/null 2>&1) \
+        if (cd "$D" && npm i -s resend@latest telnyx@latest pg @types/pg @types/node typescript@latest tsx >/dev/null 2>&1) \
            && createdb "$WDB" && sed 's/--> statement-breakpoint//' "$D"/out/*.sql | psql -X -q "$WDB" >/dev/null 2>&1 \
            && psql -X -q -v ON_ERROR_STOP=1 -f "$KIT/tests/fixtures/worker-seed.sql" "$WDB" >/dev/null; then
             ln -s "$D/node_modules" "$W/node_modules"
@@ -180,6 +181,69 @@ if [ "${MKT_TEST_SQL:-1}" = 1 ] && command -v createdb >/dev/null && command -v 
             [ "$(q "select count(*) from crm_messages where channel='sms' and status='sent'")" = 2 ] && ok "SMS sent, paced per sender" || bad "sms sent"
         else bad "worker harness setup"; fi
         dropdb --if-exists "$WDB" >/dev/null 2>&1
+
+        echo "▶ partner-program + loyalty-engine (real Postgres + mock PayPal)"
+        P="$T/prog"; PDB="${DB}_p"; mkdir -p "$P/ref" "$P/sql"
+        cp "$KIT"/skills/partner-program/references/{partner-tracking,payouts,creator-discovery}.ts "$KIT"/skills/loyalty-engine/references/loyalty.ts \
+           "$KIT"/skills/meta-ads/references/meta-capi.ts "$KIT"/skills/growth-optimizer/references/bandit.ts "$P/ref/"
+        cp "$KIT"/skills/partner-program/references/partner.sql "$KIT"/skills/loyalty-engine/references/loyalty.sql "$P/sql/"
+        cp "$KIT"/tests/fixtures/{programs-e2e,bandit-e2e}.mts "$P/"
+        ln -s "$D/node_modules" "$P/node_modules"
+        pq() { psql -X -At "$PDB" -c "$1"; }
+        if createdb "$PDB" && sed 's/--> statement-breakpoint//' "$D"/out/*.sql | psql -X -q -v ON_ERROR_STOP=1 "$PDB" >/dev/null 2>&1 \
+           && psql -X -q -v ON_ERROR_STOP=1 -f "$KIT/tests/fixtures/programs-seed.sql" "$PDB" >/dev/null 2>"$T/pseed.log"; then
+            (cd "$P" && npx tsc --noEmit --strict --skipLibCheck --types node --lib es2022,dom --module nodenext --moduleResolution nodenext \
+                --target es2022 ref/*.ts) >"$T/ptsc.log" 2>&1 && ok "6 program references typecheck (strict)" || { bad "program refs typecheck"; head -10 "$T/ptsc.log"; }
+            for i in 1 2; do psql -X -q -v ON_ERROR_STOP=1 -f "$P/sql/partner.sql" "$PDB" >/dev/null 2>"$T/psql.log" || bad "partner.sql run $i"; done
+            [ "$(pq "select string_agg(partner_id::text||'='||s, ',' order by partner_id) from (select partner_id, sum(amount_cents) s from crm_commissions where status='approved' and payout_id is null group by 1) x")" \
+              = "00000000-0000-0000-0000-0000000000a1=10050,00000000-0000-0000-0000-0000000000a2=1000" ] \
+              && ok "commissions: tier at order time, refund clawback, hold → Maya \$100.50, referrer \$10" || bad "partner.sql payable"
+            [ "$(pq "select count(*)||'|'||sum(amount_cents) from crm_commissions")" = "5|13250" ] && ok "partner.sql is idempotent (2 runs → 5 rows)" || bad "partner.sql idempotency"
+            for i in 1 2; do psql -X -q -v ON_ERROR_STOP=1 -f "$P/sql/loyalty.sql" "$PDB" >/dev/null 2>>"$T/psql.log" || bad "loyalty.sql run $i"; done
+            [ "$(pq "select string_agg(c.email||':'||s.tier||':'||s.points, ',' order by c.email) from crm_loyalty_status s join crm_contacts c on c.id=s.contact_id where c.email like 'b%'")" \
+              = "b1@x.test:silver:1125,b2@x.test:member:250,b3@x.test:member:280" ] && ok "loyalty: tiers on 12-month spend, multiplier, refund clawback" || bad "loyalty.sql balances"
+            (cd "$P" && DATABASE_URL="postgres:///$PDB" MKT_SQL_DIR="$P/sql" npx tsx programs-e2e.mts) >"$T/pe2e.log" 2>&1
+            n_ok=$(grep -c '^OK' "$T/pe2e.log"); n_bad=$(grep -c '^FAIL' "$T/pe2e.log")
+            [ "$n_ok" -ge 23 ] && [ "$n_bad" = 0 ] && ok "programs E2E: $n_ok checks (attribution, payouts, PayPal/Venmo, webhooks, Cash App, loyalty)" \
+              || { bad "programs E2E ($n_ok ok, $n_bad fail)"; grep -v '^OK' "$T/pe2e.log" | head -10; }
+            (cd "$P" && DATABASE_URL="postgres:///$PDB" npx tsx bandit-e2e.mts) >"$T/be2e.log" 2>&1
+            n_ok=$(grep -c '^OK' "$T/be2e.log"); n_bad=$(grep -c '^FAIL' "$T/be2e.log")
+            [ "$n_ok" -ge 6 ] && [ "$n_bad" = 0 ] && ok "bandit: value-weighted Thompson converges, sticky, learns on reward" \
+              || { bad "bandit E2E ($n_ok ok, $n_bad fail)"; grep -v '^OK' "$T/be2e.log" | head -10; }
+        else bad "programs DB setup"; head -5 "$T/pseed.log"; fi
+        dropdb --if-exists "$PDB" >/dev/null 2>&1
+
+        if [ "${MKT_TEST_ML:-1}" = 1 ] && command -v uv >/dev/null; then
+            echo "▶ growth-optimizer on synthetic history (uv, real Postgres)"
+            for size in big tiny; do
+                ODB="${DB}_o$size"; createdb "$ODB" && sed 's/--> statement-breakpoint//' "$D"/out/*.sql | psql -X -q "$ODB" >/dev/null 2>&1 \
+                  && psql -X -q -f "$KIT/skills/growth-optimizer/references/optimizer.sql" "$ODB" >/dev/null 2>&1
+                DATABASE_URL="postgres:///$ODB" uv run -q "$KIT/tests/fixtures/optimizer-synth.py" "$size" >/dev/null 2>&1
+                DATABASE_URL="postgres:///$ODB" uv run -q "$KIT/skills/growth-optimizer/scripts/optimize.py" >"$T/opt_$size.json" 2>"$T/opt_$size.err"
+                if [ "$size" = big ]; then
+                    python3 - "$T/opt_big.json" <<'PY' && ok "big: gbm beats baselines on held-out time (churn AUC, CLV deviance), CLV calibrated" || { bad "optimizer big"; head -40 "$T/opt_big.json" "$T/opt_big.err"; }
+import json, sys
+c = json.load(open(sys.argv[1]))["customers"]
+ch, cl = c["churn_90d"], c["clv"]
+assert ch["used"].endswith("gbm") and ch["auc_model"] > ch["auc_baseline"] and ch["auc_model"] > 0.85, ch
+assert cl["used"].endswith("gbm") and cl["dev_model"] < cl["dev_baseline"] and 0.7 < cl["calibration_model"] < 1.3, cl
+PY
+                    [ "$(psql -X -At "$ODB" -c "select string_agg(subject_id, ',' order by value desc) from crm_scores where model='partner_quality'")" \
+                      = "00000000-0000-0000-0000-000000000a11,00000000-0000-0000-0000-000000000b22" ] && ok "partner_quality ranks the repeat-buyer creator above the refunder" || bad "partner_quality order"
+                    [ "$(psql -X -At "$ODB" -c "select count(distinct subject_id) from crm_scores where model in ('churn_90d','clv')")" = 1200 ] && ok "scores written for all 1,200 customers" || bad "score coverage"
+                    OPTIMIZER_DATABASE_URL="postgres:///$ODB" uv run -q "$KIT/skills/growth-optimizer/scripts/optimize.py" --if-due | grep -q '"not due"' \
+                      && ok "--if-due: no new orders → no retrain" || bad "--if-due"
+                else
+                    python3 -c 'import json,sys; c=json.load(open(sys.argv[1]))["customers"]; assert all(v["used"].endswith("baseline") for v in c.values()), c' "$T/opt_tiny.json" \
+                      && ok "tiny (94 orders): gated → transparent baselines, no overfit model" || { bad "optimizer tiny"; head -20 "$T/opt_tiny.json" "$T/opt_tiny.err"; }
+                fi
+                dropdb --if-exists "$ODB" >/dev/null 2>&1
+            done
+            EDB="${DB}_e"; createdb "$EDB"
+            OPTIMIZER_DATABASE_URL="postgres:///$EDB" uv run -q "$KIT/skills/growth-optimizer/scripts/optimize.py" --if-due | grep -q "not migrated" \
+              && ok "--if-due in a project without program tables: silent no-op" || bad "--if-due unmigrated"
+            dropdb --if-exists "$EDB" >/dev/null 2>&1
+        else echo "  · growth-optimizer run skipped (MKT_TEST_ML=0 or no uv)"; fi
     else bad "schema generate/apply"; tail -5 "$T/dk.log" "$T/ddl.log" 2>/dev/null; fi
     dropdb --if-exists "$DB" >/dev/null 2>&1
 else echo "  · local Postgres not available — SQL run skipped"; fi

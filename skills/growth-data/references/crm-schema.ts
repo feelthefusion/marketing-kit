@@ -15,9 +15,13 @@
 //   5. Revenue comes from the app's OWN order/payment rows, never from click counts.
 //   6. All data is first-party: the site writes its own events (journey-analytics →
 //      references/first-party-tracking.ts); no third-party analytics or billing IDs.
+//   7. Money and points are LEDGERS (append-only rows, balance = sum), each row keyed so a
+//      replayed webhook / retried job can never double-credit (partner-program, loyalty-engine).
+//   8. Models write scores back as rows (crm_scores) — segments, commission tiers and offers
+//      read them like any other column (growth-optimizer).
 // =============================================================================
 import {
-  pgTable, text, timestamp, jsonb, boolean, integer, bigint, uuid, index, uniqueIndex, pgEnum,
+  pgTable, text, timestamp, jsonb, boolean, integer, bigint, uuid, index, uniqueIndex, pgEnum, real, primaryKey,
 } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 
@@ -165,4 +169,204 @@ export const crmRevenue = pgTable("crm_revenue", {
   mrrDeltaCents: bigint("mrr_delta_cents", { mode: "number" }).notNull().default(0),
   occurredAt: timestamp("occurred_at", { withTimezone: true }).notNull(),
   attributedCampaignId: text("attributed_campaign_id"), // last campaign message within window, see journey-analytics
-}, (t) => [index("crm_revenue_contact_time_idx").on(t.contactId, t.occurredAt)]);
+  parentId: text("parent_id"),                          // refund/contraction → the order it reverses (drives clawbacks)
+}, (t) => [index("crm_revenue_contact_time_idx").on(t.contactId, t.occurredAt), index("crm_revenue_parent_idx").on(t.parentId)]);
+
+// =============================================================================
+// PARTNER PROGRAM — creators, influencers, affiliates, ambassadors, customer referrers.
+// One engine for all of them: a partner is a contact with a plan, codes and a payout method.
+// =============================================================================
+export const crmCommissionPlans = pgTable("crm_commission_plans", {
+  id: text("id").primaryKey(),                            // "creator-std", "vip-creator", "customer-referral"
+  name: text("name").notNull(),
+  rateBps: integer("rate_bps").notNull().default(0),      // % of NET order value (after discount, before tax/ship)
+  flatCents: integer("flat_cents").notNull().default(0),  // per attributed order (CPA) — hybrid = both
+  newCustomersOnly: boolean("new_customers_only").notNull().default(false),
+  recurringMonths: integer("recurring_months").notNull().default(0), // 0 = first order only; N = repeat orders for N months
+  customerDiscountBps: integer("customer_discount_bps").notNull().default(0), // what the partner's code gives their audience
+  cookieDays: integer("cookie_days").notNull().default(30),   // link attribution window
+  holdDays: integer("hold_days").notNull().default(30),       // pending → approved after the refund window
+  tiers: jsonb("tiers").$type<{ minMonthlyNetCents: number; rateBps: number }[]>().notNull().default([]), // performance ladder
+  active: boolean("active").notNull().default(true),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const crmPartners = pgTable("crm_partners", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  contactId: uuid("contact_id").notNull().references(() => crmContacts.id, { onDelete: "cascade" }),
+  kind: text("kind").notNull(),                 // creator | affiliate | ambassador | customer
+  status: text("status").notNull().default("active"), // applied | active | paused | removed
+  displayName: text("display_name"),
+  planId: text("plan_id").notNull().references(() => crmCommissionPlans.id),
+  tier: text("tier"),                           // set by the tier ladder / growth-optimizer, not by hand
+  platforms: jsonb("platforms").$type<Record<string, { handle: string; followers?: number; engagementBps?: number }>>().notNull().default({}),
+  payoutMethod: text("payout_method").notNull().default("store_credit"), // paypal | venmo | cashapp | zelle | store_credit
+  payoutHandle: text("payout_handle"),          // PayPal email · Venmo US mobile · $cashtag · Zelle email/phone
+  prospectId: uuid("prospect_id"),              // the crm_creator_prospects row they were signed from
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [uniqueIndex("crm_partners_contact_uq").on(t.contactId), index("crm_partners_status_idx").on(t.status)]);
+
+// Codes and links are the same object: a code is typed at checkout, a link carries ?ref=<code>.
+export const crmPartnerCodes = pgTable("crm_partner_codes", {
+  code: text("code").primaryKey(),              // stored lower-case; matching is case-insensitive
+  partnerId: uuid("partner_id").notNull().references(() => crmPartners.id, { onDelete: "cascade" }),
+  discountBps: integer("discount_bps"),         // override of the plan's customer discount
+  destination: text("destination"),             // landing page for the short link
+  campaign: text("campaign"),                   // optional: which content/drop it belongs to
+  active: boolean("active").notNull().default(true),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [index("crm_partner_codes_partner_idx").on(t.partnerId)]);
+
+// One row per order that a partner earned. Written at order.paid by partner-tracking.ts.
+export const crmAttributions = pgTable("crm_attributions", {
+  orderId: text("order_id").primaryKey(),       // == crm_revenue.id (the app's own order id)
+  partnerId: uuid("partner_id").notNull().references(() => crmPartners.id),
+  code: text("code"),
+  method: text("method").notNull(),             // code | link | code+link   (typed code beats a cookie)
+  contactId: uuid("contact_id").references(() => crmContacts.id),
+  newCustomer: boolean("new_customer").notNull(),
+  netCents: bigint("net_cents", { mode: "number" }).notNull(),
+  touchAt: timestamp("touch_at", { withTimezone: true }),   // when the ref link was clicked (link method)
+  attributedAt: timestamp("attributed_at", { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [index("crm_attributions_partner_idx").on(t.partnerId, t.attributedAt)]);
+
+export const crmCommissions = pgTable("crm_commissions", {
+  id: bigint("id", { mode: "number" }).primaryKey().generatedAlwaysAsIdentity(),
+  partnerId: uuid("partner_id").notNull().references(() => crmPartners.id),
+  orderId: text("order_id"),
+  kind: text("kind").notNull(),                 // sale | bonus | clawback | adjustment
+  amountCents: bigint("amount_cents", { mode: "number" }).notNull(), // negative for clawback
+  rateBps: integer("rate_bps"),                 // the rate actually applied (tier at the time)
+  status: text("status").notNull().default("pending"), // pending | approved | paid | void
+  availableAt: timestamp("available_at", { withTimezone: true }).notNull(), // end of hold → approvable
+  payoutId: uuid("payout_id"),
+  idemKey: text("idem_key").notNull(),          // "sale:{order}" · "clawback:{refund}" · "bonus:{partner}:{period}"
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [uniqueIndex("crm_commissions_idem_uq").on(t.idemKey), index("crm_commissions_partner_status_idx").on(t.partnerId, t.status)]);
+
+// One row per partner per payout run. PayPal/Venmo: sent by API. Cash App/Zelle: no public payout
+// API exists, so the row is the instruction and someone marks it paid with the reference.
+export const crmPayouts = pgTable("crm_payouts", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  partnerId: uuid("partner_id").notNull().references(() => crmPartners.id),
+  method: text("method").notNull(),             // paypal | venmo | cashapp | zelle | store_credit
+  handle: text("handle"),
+  amountCents: bigint("amount_cents", { mode: "number" }).notNull(),
+  currency: text("currency").notNull().default("USD"),
+  status: text("status").notNull().default("draft"), // draft | sent | paid | failed | returned
+  provider: text("provider").notNull(),          // paypal | manual | ledger
+  senderBatchId: text("sender_batch_id"),        // PayPal idempotency (30-day window)
+  providerBatchId: text("provider_batch_id"),
+  providerItemId: text("provider_item_id"),
+  paidRef: text("paid_ref"),                     // manual: Cash App / Zelle confirmation
+  error: text("error"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  paidAt: timestamp("paid_at", { withTimezone: true }),
+}, (t) => [index("crm_payouts_status_idx").on(t.status, t.method)]);
+
+// Discovery pipeline: official APIs (YouTube Data, Instagram business_discovery, TikTok One)
+// + inbound applications. Scored by growth-optimizer; signed prospects become crm_partners.
+export const crmCreatorProspects = pgTable("crm_creator_prospects", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  platform: text("platform").notNull(),          // youtube | instagram | tiktok
+  externalId: text("external_id").notNull(),     // channel id / ig user id / tiktok creator id
+  handle: text("handle").notNull(),
+  followers: integer("followers"),
+  avgViews: integer("avg_views"),
+  engagementBps: integer("engagement_bps"),      // (likes+comments)/views or /followers, in bps
+  niches: text("niches").array().notNull().default(sql`'{}'::text[]`),
+  email: text("email"),
+  source: text("source").notNull(),              // youtube_api | ig_business_discovery | tiktok_one | application | manual
+  stage: text("stage").notNull().default("found"), // found | contacted | replied | negotiating | signed | declined
+  fitScore: real("fit_score"),                   // growth-optimizer: predicted value of signing
+  raw: jsonb("raw").$type<Record<string, unknown>>().notNull().default({}),
+  lastContactedAt: timestamp("last_contacted_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [uniqueIndex("crm_creator_prospects_uq").on(t.platform, t.externalId), index("crm_creator_prospects_stage_idx").on(t.stage, t.fitScore)]);
+
+// =============================================================================
+// LOYALTY + STORE CREDIT — two ledgers. Points buy rewards; store credit is money.
+// =============================================================================
+export const crmLoyaltyTiers = pgTable("crm_loyalty_tiers", {
+  id: text("id").primaryKey(),                   // "member", "silver", "gold", "vip"
+  rank: integer("rank").notNull(),
+  minSpend12mCents: bigint("min_spend_12m_cents", { mode: "number" }).notNull(), // rolling 12-month net spend
+  earnMultiplierBps: integer("earn_multiplier_bps").notNull().default(10000),    // 10000 = 1×
+  perks: jsonb("perks").$type<Record<string, unknown>>().notNull().default({}),
+});
+
+export const crmLoyaltyLedger = pgTable("crm_loyalty_ledger", {
+  id: bigint("id", { mode: "number" }).primaryKey().generatedAlwaysAsIdentity(),
+  contactId: uuid("contact_id").notNull().references(() => crmContacts.id, { onDelete: "cascade" }),
+  points: integer("points").notNull(),           // + earn, − redeem/expire/clawback
+  kind: text("kind").notNull(),                  // earn_order | earn_referral | earn_action | bonus | redeem | expire | clawback | adjust
+  ref: text("ref").notNull(),                    // order id, reward redemption id, action key…
+  expiresAt: timestamp("expires_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [uniqueIndex("crm_loyalty_ledger_uq").on(t.contactId, t.kind, t.ref), index("crm_loyalty_ledger_contact_idx").on(t.contactId, t.createdAt)]);
+
+export const crmLoyaltyRewards = pgTable("crm_loyalty_rewards", {
+  id: text("id").primaryKey(),
+  name: text("name").notNull(),
+  costPoints: integer("cost_points").notNull(),
+  creditCents: integer("credit_cents"),          // store credit granted (or use perk for non-cash rewards)
+  perk: jsonb("perk").$type<Record<string, unknown>>(),
+  minTierRank: integer("min_tier_rank").notNull().default(0),
+  active: boolean("active").notNull().default(true),
+});
+
+export const crmStoreCredit = pgTable("crm_store_credit", {
+  id: bigint("id", { mode: "number" }).primaryKey().generatedAlwaysAsIdentity(),
+  contactId: uuid("contact_id").notNull().references(() => crmContacts.id, { onDelete: "cascade" }),
+  amountCents: bigint("amount_cents", { mode: "number" }).notNull(), // + grant, − spend
+  kind: text("kind").notNull(),                  // commission_payout | reward | order_spend | refund | adjust
+  ref: text("ref").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [uniqueIndex("crm_store_credit_uq").on(t.kind, t.ref), index("crm_store_credit_contact_idx").on(t.contactId)]);
+
+// =============================================================================
+// LEARNING — bandits choose between live options; models score people and partners.
+// =============================================================================
+// An experiment is any repeated choice: which commission plan to offer a new creator, which
+// loyalty offer to show, which subject line, which reward. Arms keep Beta posteriors.
+export const crmArms = pgTable("crm_arms", {
+  experimentId: text("experiment_id").notNull(),
+  armId: text("arm_id").notNull(),
+  spec: jsonb("spec").$type<Record<string, unknown>>().notNull().default({}), // what the arm IS
+  pulls: integer("pulls").notNull().default(0),
+  successes: integer("successes").notNull().default(0),
+  rewardCents: bigint("reward_cents", { mode: "number" }).notNull().default(0), // value-weighted reward
+  active: boolean("active").notNull().default(true),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [primaryKey({ columns: [t.experimentId, t.armId] })]);
+
+export const crmArmPulls = pgTable("crm_arm_pulls", {
+  id: bigint("id", { mode: "number" }).primaryKey().generatedAlwaysAsIdentity(),
+  experimentId: text("experiment_id").notNull(),
+  armId: text("arm_id").notNull(),
+  subjectId: text("subject_id").notNull(),       // contact or partner id
+  rewarded: boolean("rewarded").notNull().default(false),
+  rewardCents: bigint("reward_cents", { mode: "number" }).notNull().default(0),
+  pulledAt: timestamp("pulled_at", { withTimezone: true }).notNull().defaultNow(),
+  rewardedAt: timestamp("rewarded_at", { withTimezone: true }),
+}, (t) => [uniqueIndex("crm_arm_pulls_uq").on(t.experimentId, t.subjectId), index("crm_arm_pulls_arm_idx").on(t.experimentId, t.armId)]);
+
+export const crmScores = pgTable("crm_scores", {
+  subjectKind: text("subject_kind").notNull(),   // contact | partner | prospect
+  subjectId: text("subject_id").notNull(),
+  model: text("model").notNull(),                // clv_12m | churn_90d | next_offer | partner_quality | prospect_fit
+  value: real("value").notNull(),
+  detail: jsonb("detail").$type<Record<string, unknown>>().notNull().default({}),
+  modelVersion: text("model_version").notNull(),
+  scoredAt: timestamp("scored_at", { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [primaryKey({ columns: [t.subjectKind, t.subjectId, t.model] }), index("crm_scores_model_value_idx").on(t.model, t.value)]);
+
+export const crmModelRuns = pgTable("crm_model_runs", {
+  id: bigint("id", { mode: "number" }).primaryKey().generatedAlwaysAsIdentity(),
+  model: text("model").notNull(),
+  version: text("version").notNull(),
+  trigger: text("trigger").notNull(),            // orders_threshold | manual | first_run
+  nRows: integer("n_rows").notNull(),
+  metrics: jsonb("metrics").$type<Record<string, unknown>>().notNull().default({}), // holdout AUC/MAE, calibration
+  trainedAt: timestamp("trained_at", { withTimezone: true }).notNull().defaultNow(),
+});
