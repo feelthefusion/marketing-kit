@@ -16,7 +16,7 @@
 coreyhaines31/marketingskills/skills/product-marketing	both	community	positioning, ICP, messaging → .agents/product-marketing-context.md (the shared context file)
 coreyhaines31/marketingskills/skills/customer-research	both	community	research synthesis, personas, JTBD, voice of customer
 coreyhaines31/marketingskills/skills/marketing-plan	both	community	strategy, AARRR plan, budget & media planning
-coreyhaines31/marketingskills/skills/marketing-council	both	community	multi-perspective strategy review of a plan
+coreyhaines31/marketingskills/skills/marketing-council	claude	community	multi-perspective strategy review of a plan (Hermes hub can't fetch it yet: SKILL.md names the dir references/advisors, which the bundler rejects)
 coreyhaines31/marketingskills/skills/competitor-profiling	both	community	competitor dossiers
 coreyhaines31/marketingskills/skills/competitors	both	community	comparison / alternative pages
 coreyhaines31/marketingskills/skills/pricing	both	community	pricing & packaging strategy
@@ -61,7 +61,7 @@ coreyhaines31/marketingskills/skills/marketing-ideas	both	community	idea bank (g
 coreyhaines31/marketingskills/skills/prospecting	both	community	B2B prospect lists / ABM targets
 coreyhaines31/marketingskills/skills/cold-email	both	community	B2B outbound copy
 coreyhaines31/marketingskills/skills/sales-enablement	both	community	B2B decks, one-pagers, objection handling
-mvanhorn/last30days-skill/skills/last30days	both	community	live social listening (Reddit/X/YouTube/HN, last 30 days)
+mvanhorn/last30days-skill/skills/last30days	claude	community	live social listening (Reddit/X/YouTube/HN, last 30 days) (Hermes: blocked by the security scanner per the author's HERMES_SETUP.md; the kit never bypasses it)
 arnabbagxd/Brand-building-skills/skills/brand-strategy	both	community	brand strategy → .agents/brand-context.md
 arnabbagxd/Brand-building-skills/skills/brand-architecture	both	community	brand architecture (master/sub/endorsed brands)
 arnabbagxd/Brand-building-skills/skills/brand-naming	both	community	naming products, tiers, programs

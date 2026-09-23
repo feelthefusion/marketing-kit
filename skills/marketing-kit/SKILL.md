@@ -32,7 +32,7 @@ context files > a skill's generic advice.** Update the context file when a resul
 
 | Discipline | Think (strategy) | Do (executor on your stack) | Measure |
 |---|---|---|---|
-| Research, ICP, positioning | `customer-research`, `product-marketing`, `competitor-profiling`, `competitors`, `last30days` (live social listening), `marketing-council` | `growth-data` (cohorts from your DB) | `journey-analytics` |
+| Research, ICP, positioning | `customer-research`, `product-marketing`, `competitor-profiling`, `competitors`, `last30days` (live social listening; Claude Code), `marketing-council` (Claude Code) | `growth-data` (cohorts from your DB) | `journey-analytics` |
 | Brand | `brand-strategy`, `brand-architecture`, `brand-naming` | (writes `.agents/brand-context.md`) | — |
 | Plans, ideas, launches, PR, events | `marketing-plan`, `marketing-ideas`, `launch`, `public-relations`, `events` | `lifecycle-engine` (waitlists, launch sends) | `journey-analytics` |
 | Pricing, offers, bundles | `pricing`, `offers` | `lifecycle-engine` + `growth-optimizer` (offer arms) | `growth-optimizer` |
@@ -89,7 +89,7 @@ Other skills read these tables. They write through the owner's functions, never 
 ## The loop (event-driven; each step names its owner)
 
 1. **Recall**: `playbook-ledger` (`mkt-ledger recall "<goal> <segment>"`). Never re-run a failed play without saying what differs.
-2. **Listen**: `journey-analytics` (events + orders, Umami, `mobile.sql`) + `last30days` (what people say right now). The output is a number.
+2. **Listen**: `journey-analytics` (events + orders, Umami, `mobile.sql`) + `last30days` (what people say right now; Claude Code only, so on Hermes use `web_search`/`xurl` for the same sweep). The output is a number.
 3. **Segment**: `growth-data`, a read-only SELECT (`references/cohorts.sql`) returning `contact_id` + template columns.
 4. **Shape**: the Think skill for the discipline (map above). Write the hypothesis and ONE primary metric.
 5. **Write**: `copywriting` / `emails` / `sms` → `copy-editing` → `humanizer`. Mobile-length first (SMS, push, and a 390px-wide screen).
