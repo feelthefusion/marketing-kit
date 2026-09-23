@@ -2,7 +2,7 @@
 # =============================================================================
 # Marketing Kit — Umami (core web analytics, self-hosted on YOUR Railway project).
 #
-#   mkt-umami deploy [--dry-run]   add Postgres + the official Umami image to the linked Railway
+#   mkt-umami deploy [--dry-run|--yes] add Postgres + the official Umami image to the linked Railway
 #                                  project, generate secrets, create a domain, store
 #                                  UMAMI_DATABASE_URL (read-only MCP) + UMAMI_URL in secrets.env
 #   mkt-umami status               heartbeat + whether the MCP can reach its DB
@@ -28,9 +28,10 @@ put_secret() {  # put_secret KEY VALUE (replace or append; file stays 600)
 }
 rand_hex() { openssl rand -hex "$1" 2>/dev/null || head -c "$1" /dev/urandom | od -An -tx1 | tr -d ' \n'; }
 kv() { railway variables -s "$1" --kv 2>/dev/null | grep -E "^$2=" | head -1 | cut -d= -f2-; }
+svc_names() { railway service list --json 2>/dev/null | python3 -c 'import json,sys; d=json.load(sys.stdin); d=d if isinstance(d,list) else d.get("services",[]); print("\n".join(s["name"] for s in d))'; }
 
 deploy() {
-    local dry=0; [ "${1:-}" = --dry-run ] && dry=1
+    local dry=0 yes=0; case "${1:-}" in --dry-run) dry=1 ;; --yes|-y) yes=1 ;; esac
     command -v railway >/dev/null 2>&1 || die "railway CLI missing — bash <(curl -fsSL https://railway.com/install.sh)"
     railway status >/dev/null 2>&1 || die "not linked — run \`railway link\` in the app repo first (Umami joins that project)"
     local proj; proj="$(railway status 2>/dev/null | sed -n 's/^Project: *//p' | head -1)"
@@ -40,10 +41,16 @@ deploy() {
     say "  both are billable Railway services (small: Umami idles at ~150–250 MB RAM)."
     if [ "$dry" = 0 ]; then
         [ -n "$(kv "$APP_SVC" DATABASE_URL 2>/dev/null)" ] && die "service '$APP_SVC' already exists — use: mkt-umami status"
-        printf '  continue? [y/N] '; read -r a </dev/tty || a=n
+        if [ "$yes" = 1 ]; then a=y; else printf '  continue? [y/N] '; read -r a </dev/tty || a=n; fi
         case "$a" in y|Y|yes) ;; *) say "  aborted"; exit 1 ;; esac
     fi
+    local before=""; [ "$dry" = 0 ] && before="$(svc_names)"
     run railway add -d postgres -s "$DB_SVC"
+    # Railway CLI 5.x ignores -s for databases (names it Postgres-xxxx): use the name it chose
+    if [ "$dry" = 0 ]; then
+        local made; made="$(svc_names | grep -vxF "$before" | head -1)"
+        [ -n "$made" ] && [ "$made" != "$DB_SVC" ] && { say "  Railway named the database '$made'"; DB_SVC="$made"; }
+    fi
     run railway add -s "$APP_SVC" -i "$IMAGE" \
         -v "DATABASE_URL=\${{$DB_SVC.DATABASE_URL}}" \
         -v "APP_SECRET=$( [ "$dry" = 1 ] && echo '<random 32B hex>' || rand_hex 32)" \
@@ -53,7 +60,13 @@ deploy() {
     [ "$dry" = 1 ] && { say "  (dry run — nothing created)"; return 0; }
 
     say "  waiting for Postgres credentials…"
-    local pub=""; for _ in $(seq 1 60); do pub="$(kv "$DB_SVC" DATABASE_PUBLIC_URL)"; [ -n "$pub" ] && break; sleep 3; done
+    local pub="" pw=""; for _ in $(seq 1 60); do pw="$(kv "$DB_SVC" PGPASSWORD)"; [ -n "$pw" ] && break; sleep 3; done
+    pub="$(kv "$DB_SVC" DATABASE_PUBLIC_URL)"
+    if [ -z "$pub" ] && [ -n "$pw" ]; then   # newer Postgres template: no public proxy by default
+        railway tcp-proxy create --port 5432 --service "$DB_SVC" >/dev/null 2>&1 || warn "could not create a TCP proxy on $DB_SVC"
+        local hp; hp="$(railway tcp-proxy list --service "$DB_SVC" --json 2>/dev/null | python3 -c 'import json,sys; print(json.load(sys.stdin)["proxies"][0]["endpoint"])' 2>/dev/null)"
+        [ -n "$hp" ] && pub="$(python3 -c 'import sys,urllib.parse as u; print("postgresql://%s:%s@%s/%s" % (sys.argv[1], u.quote(sys.argv[2], safe=""), sys.argv[3], sys.argv[4]))' "$(kv "$DB_SVC" PGUSER)" "$pw" "$hp" "$(kv "$DB_SVC" PGDATABASE)")"
+    fi
     [ -n "$pub" ] || die "no DATABASE_PUBLIC_URL on $DB_SVC yet — re-run: mkt-umami status"
     put_secret UMAMI_DATABASE_URL "$pub"; ok "UMAMI_DATABASE_URL → $SECRETS (MCP 'umami' reads it read-only)"
     # living: mkt-update redeploys this service from the latest image when Umami cuts a release
