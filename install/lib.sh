@@ -167,16 +167,18 @@ if not any("mkt-update" in h.get("command", "") for g in ss for h in g.get("hook
 else: print("present")
 PY
 }
-wire_hermes_update_hook() {
-    local ours='{"on_session_start":[{"command":"'"$MKT_BIN"'/mkt-update --hook","timeout":10}]}'
-    if hermes config get hooks 2>/dev/null | grep -q 'mkt-update'; then echo present; return; fi
-    local merged; merged="$(hermes config get --json hooks 2>/dev/null | python3 -c '
+wire_hermes_update_hook() {   # appends to hooks.on_session_start (dotted path: other hook sections untouched)
+    local cur merged
+    cur="$(hermes config get --json hooks.on_session_start 2>/dev/null || echo null)"
+    case "$cur" in *mkt-update*) echo present; return ;; esac
+    merged="$(python3 -c '
 import json, sys
-try: cur = json.load(sys.stdin) or {}
-except Exception: cur = {}
-for ev, lst in json.loads(sys.argv[1]).items(): cur.setdefault(ev, []).extend(lst)
-print(json.dumps(cur))' "$ours" 2>/dev/null || echo "$ours")"
-    hermes config set hooks "$merged" >/dev/null 2>&1 && echo added || echo failed
+try: cur = json.loads(sys.argv[1]) or []
+except Exception: cur = []
+if not isinstance(cur, list): cur = []
+cur.append({"command": sys.argv[2] + " --hook", "timeout": 10})
+print(json.dumps(cur))' "$cur" "$MKT_BIN/mkt-update")"
+    hermes config set hooks.on_session_start "$merged" >/dev/null 2>&1 && echo added || echo failed
 }
 
 write_kit_version() {  # $1 = kit root  $2 = dir
