@@ -4,6 +4,7 @@
 //
 //   A. client   captureRef()            ?ref=CODE on any URL → first-party cookie + partner.clicked
 //   B. route    app/r/[code]/route.ts   short links: yoursite.com/r/maya → destination?ref=maya
+//               app/r/[code]/qr/route.ts partnerQr(): printable QR of the same link (utm_source=qr)
 //   C. checkout previewCode(code)       server-authoritative discount for a typed code
 //   D. order    attributeOrder(tx, o)   at order.paid, IN THE SAME TRANSACTION as the order write
 //   E. money    settle(db)              runs partner.sql 1–3 (accrue · claw back · approve)
@@ -19,6 +20,7 @@ import { sql } from "drizzle-orm";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
+import * as QRCode from "qrcode";
 
 type Db = NodePgDatabase<Record<string, never>>;
 type Tx = Parameters<Parameters<Db["transaction"]>[0]>[0];
@@ -42,7 +44,31 @@ export async function shortLink(db: Db, code: string, req: Request): Promise<Res
     select destination from crm_partner_codes where code = ${c} and active`);
   const dest = new URL(rows[0]?.destination ?? "/", req.url);
   if (rows.length) dest.searchParams.set("ref", c);   // captureRef() on the landing page logs the click
+  for (const [k, v] of new URL(req.url).searchParams) if (k.startsWith("utm_")) dest.searchParams.set(k, v);
   return Response.redirect(dest, 302);
+}
+
+// QR for print, packaging, stickers, in-store and creator videos. It encodes the SAME /r/<code> link, so one
+// code works on the web, opens the app when installed (universal/app links) and survives the store
+// install (mobile-growth claims). utm_source=qr makes scans report apart from taps.
+// GET /r/<code>/qr → SVG · /r/<code>/qr?format=png&size=1024 → PNG
+export async function partnerQr(db: Db, code: string, req: Request): Promise<Response> {
+  const c = code.toLowerCase();
+  const { rows } = await db.execute(sql`select 1 from crm_partner_codes where code = ${c} and active`);
+  if (!rows.length) return new Response("unknown code", { status: 404 });
+  const q = new URL(req.url).searchParams;
+  const link = new URL(`/r/${encodeURIComponent(c)}`, req.url);
+  link.search = "";
+  link.searchParams.set("utm_source", "qr");
+  link.searchParams.set("utm_medium", q.get("medium") ?? "print");
+  const opts = { errorCorrectionLevel: "M" as const, margin: 2 };
+  const headers = { "cache-control": "public, max-age=86400", "x-qr-target": link.toString() };
+  if (q.get("format") === "png") {
+    const png = await QRCode.toBuffer(link.toString(), { ...opts, width: Math.min(Number(q.get("size") ?? 1024), 4096) });
+    return new Response(new Uint8Array(png), { headers: { ...headers, "content-type": "image/png" } });
+  }
+  const svg = await QRCode.toString(link.toString(), { ...opts, type: "svg" });
+  return new Response(svg, { headers: { ...headers, "content-type": "image/svg+xml" } });
 }
 
 // ---- C. checkout preview ------------------------------------------------------------------

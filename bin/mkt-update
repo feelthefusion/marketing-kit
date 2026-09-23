@@ -10,7 +10,7 @@
 #                           BACKGROUND — the session starts instantly, nothing waits on the network
 #
 # How it detects updates: one `git ls-remote` per upstream repo (the kit, each vendor
-# marketplace, each Hermes skill source, Umami releases), all in parallel (~1s total). Only
+# marketplace, each curated-skill repo, each Hermes skill source, Umami releases), all in parallel (~1s total). Only
 # components whose revision moved get updated. MCP servers need nothing: they launch
 # `pkg@latest` on every start. GitHub only sends webhooks to a repo's admins (and npm/PyPI send
 # none), so for vendor upstreams the session start IS the event. Repos you own get real
@@ -42,6 +42,7 @@ components() {   # name <TAB> repo <TAB> kind
     printf 'kit\t%s\tkit\n' "${kit_repo:-feelthefusion/marketing-kit}"
     grep -v '^#' "$KIT_ROOT/install/claude-plugins.tsv" | awk -F'\t' 'NF>=3 {split($1,a,"@"); print "marketplace:" a[2] "\t" $2 "\tmarketplace"}' | sort -u
     grep -v '^#' "$KIT_ROOT/install/hermes-skills.tsv" | awk -F'\t' 'NF>=2 {split($1,a,"/"); print "hermes-skills:" a[1] "/" a[2] "\t" a[1] "/" a[2] "\thermes"}' | sort -u
+    grep -v '^#' "$KIT_ROOT/install/upstream-skills.tsv" | awk -F'\t' 'NF>=3 {split($1,a,"/"); print "upstream:" a[1] "/" a[2] "\t" a[1] "/" a[2] "\tupstream"}' | sort -u
     printf 'umami\tumami-software/umami\trelease\n'
 }
 
@@ -109,6 +110,12 @@ apply_changes() {   # $1 = TSV of changed rows, $2 = project dir ("" if none)
                     else "$CLAUDE_BIN" plugin update "$plugin" >>"$LOG" 2>&1; fi
                     done_list+=("$plugin")
                 done < <(grep -v '^#' "$KIT_ROOT/install/claude-plugins.tsv") ;;
+            upstream)   # curated skills: fast-forward the checkout — every linked repo sees it instantly
+                local d="${MKT_UPSTREAM:-${XDG_DATA_HOME:-$HOME/.local/share}/marketing-kit/upstream}/$(printf '%s' "$repo" | tr '/' '_')"
+                if [ -d "$d/.git" ] && git -C "$d" fetch --depth 1 --quiet origin HEAD >>"$LOG" 2>&1 && git -C "$d" reset --hard --quiet FETCH_HEAD; then
+                    done_list+=("$repo skills $old→$new")
+                fi
+                have_hermes && hermes skills update >>"$LOG" 2>&1 ;;
             hermes)
                 have_hermes || continue
                 hermes skills update >>"$LOG" 2>&1 && done_list+=("Hermes skills from $repo") ;;

@@ -3,9 +3,11 @@
 #        project = enabled per repo by `mkt-init` → .claude/settings.json (measured always-on cost
 #                  in brackets; loading them globally would tax every coding session ~13k tokens)
 # No analytics/billing vendor plugins: all customer data is first-party (the site + its own DBs).
+# Strategy skills are NOT plugins: they come from the curated list install/upstream-skills.tsv.
 # plugin@marketplace	marketplace repo	scope	kit component
 humanizer@humanizer	blader/humanizer	user	5 de-slop [~90 tok]
 supermemory@supermemory-plugins	supermemoryai/claude-supermemory	user	1 memory hooks (local server)
-marketing-skills@marketingskills	coreyhaines31/marketingskills	project	4 strategy + copy, 50 skills [~9.3k tok]
 resend@resend-skills	resend/resend-skills	project	7 email skills + hosted MCP (OAuth) [~0.6k tok]
 telnyx-messaging@telnyx	team-telnyx/ai	project	7 SMS skills [~0.9k tok]
+telnyx-whatsapp@telnyx	team-telnyx/ai	project	7 WhatsApp via Telnyx (same account as SMS)
+hyperframes@claude-plugins-official	anthropics/claude-plugins-official	project	4 video render layer (HeyGen, official; strategy = video skill)

@@ -1,5 +1,5 @@
 {
-  "_comment": "The ONLY limits in Marketing Kit: the ones each provider enforces itself (Resend, Telnyx, and — when you set them up — PayPal Payouts, YouTube, TikTok One, Meta). No kit caps, windows or policies. Account-specific values (your Resend rate, your 10DLC class) override via env. Re-verify against the sources when a provider changes plans — mkt-doctor --live prints them.",
+  "_comment": "The ONLY limits in Marketing Kit: the ones each provider enforces itself (Resend, Telnyx, Expo Push, Web Push, WhatsApp, Apple/Google platform rules, and — when you set them up — PayPal Payouts, YouTube, TikTok One, Meta). No kit caps, windows or policies. Account-specific values (your Resend rate, your 10DLC class) override via env. Re-verify against the sources when a provider changes plans — mkt-doctor --live prints them.",
   "fetched": "2026-09-22",
   "resend": {
     "sources": [
@@ -172,5 +172,89 @@
     "graph_version_env": "META_GRAPH_VERSION",
     "rate_limits": "Business Use Case limits per ad account/app, reported in the X-Business-Use-Case-Usage header; back off when it nears 100%",
     "ad_policies": "Meta reviews every ad against its own advertising standards; rejected ads are a provider limit"
+  },
+  "whatsapp": {
+    "sources": [
+      "https://developers.facebook.com/docs/whatsapp/throughput/",
+      "https://developers.facebook.com/docs/whatsapp/messaging-limits/",
+      "https://developers.telnyx.com/docs/messaging/whatsapp/send-messages"
+    ],
+    "via": "Telnyx (same account + SDK as SMS: client.messages.whatsapp)",
+    "mps_per_number_default": 80,
+    "mps_per_number_max": 1000,
+    "mps_env": "WHATSAPP_MPS",
+    "throughput_error": "130429 (Meta) — worker requeues",
+    "messaging_limit_unique_users_24h": {
+      "new_portfolio": 250,
+      "after_scaling_path": 2000,
+      "auto_scaling": [
+        10000,
+        100000,
+        "unlimited"
+      ],
+      "scope": "business portfolio, shared by all its numbers; counts only business-initiated messages outside the 24h customer-service window"
+    },
+    "customer_service_window_hours": 24,
+    "outside_window": "approved template only (payload.template)",
+    "errors": {
+      "40008": "WhatsApp only: template pending / rejected / paused / disabled, or delivery failure (Telnyx catch-all) → failed, not retried. On SMS 40008 stays in telnyx.errors.retry_backoff"
+    },
+    "text_body_bytes": [
+      1,
+      4096
+    ]
+  },
+  "expo_push": {
+    "sources": [
+      "https://docs.expo.dev/push-notifications/sending-notifications/",
+      "https://github.com/expo/expo-server-sdk-node"
+    ],
+    "messages_per_request_max": 100,
+    "payload_max_bytes": 4096,
+    "sdk_concurrent_connections": 6,
+    "receipts": "fetch ~15 min after sending (worker does it in its drain loop, no timer)",
+    "errors": {
+      "DeviceNotRegistered": "stop sending to that token (worker revokes the device)",
+      "MessageTooBig": "payload > 4096 bytes",
+      "MessageRateExceeded": "too fast to one device — back off and retry",
+      "InvalidCredentials": "FCM/APNs credentials missing in EAS"
+    },
+    "access_token_env": "EXPO_ACCESS_TOKEN (only if enhanced push security is on)"
+  },
+  "web_push": {
+    "sources": [
+      "https://www.rfc-editor.org/rfc/rfc8030",
+      "https://www.rfc-editor.org/rfc/rfc8291",
+      "https://webkit.org/blog/13878/web-push-for-web-apps-on-ios-and-ipados/"
+    ],
+    "guaranteed_body_bytes": 4096,
+    "plaintext_budget_bytes": 3993,
+    "note": "RFC 8030: push services MUST accept bodies ≤4096 bytes; aes128gcm adds 103 bytes → keep JSON ≤3993",
+    "ios": "iOS/iPadOS 16.4+ only for web apps added to the Home Screen",
+    "status": {
+      "404/410": "subscription gone → device revoked",
+      "413": "payload too large",
+      "429": "retry after Retry-After"
+    },
+    "keys_env": [
+      "VAPID_PUBLIC_KEY",
+      "VAPID_PRIVATE_KEY",
+      "VAPID_SUBJECT"
+    ]
+  },
+  "app_platforms": {
+    "sources": [
+      "https://developer.apple.com/documentation/storekit/requestreviewaction",
+      "https://developer.apple.com/documentation/adservices/aaattribution/attributiontoken()",
+      "https://developer.apple.com/documentation/adattributionkit/receiving-ad-attributions-and-postbacks",
+      "https://docs.expo.dev/versions/latest/sdk/application/"
+    ],
+    "ios_review_prompt": "system shows it at most 3 times per 365 days; not again for a version already rated",
+    "android_in_app_review": "Google quota, undisclosed — call only at peak moments",
+    "adservices_token_ttl_hours": 24,
+    "adservices_retry": "404 = not ready: retry up to 3 times ~5s apart",
+    "adattributionkit_copy_path": "/.well-known/appattribution/report-attribution/",
+    "skadnetwork_copy_path": "/.well-known/skadnetwork/report-attribution/",
+    "android_install_referrer": "expo-application getInstallReferrerAsync() (Play Install Referrer)"
   }
 }

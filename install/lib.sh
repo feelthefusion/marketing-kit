@@ -4,16 +4,20 @@
 #
 # LIVE BY DESIGN — nothing third-party is cloned or copied into this repo:
 #   * kit skills      → SYMLINKED from this checkout (bootstrap pulls it every run)
-#   * 3rd-party skills → Claude Code: plugins from each vendor's own marketplace, updated
-#                        every run;  Hermes: hub installs from the vendor repo + `hermes
-#                        skills update` every run
+#   * curated upstream → install/upstream-skills.tsv, ONE list for both hosts. Claude Code:
+#                        shallow checkouts in $MKT_UPSTREAM (pulled by mkt-update on session
+#                        start) SYMLINKED per repo by mkt-init; Hermes: hub installs + `hermes
+#                        skills update`. Only listed skills exist → nothing duplicates.
+#   * vendor packs     → Claude Code: plugins from each vendor's own marketplace, updated
+#                        every run;  Hermes: hub installs from the vendor repo (hermes-skills.tsv)
 #   * MCP servers     → `mkt-mcp <name>` launches `pkg@latest` on every start
 # =============================================================================
 
 MKT_BIN="$HOME/.local/bin"
 MKT_CONF="$HOME/.config/marketing-kit"
 MKT_SECRETS="$MKT_CONF/secrets.env"
-KIT_SKILLS="marketing-kit growth-data journey-analytics campaign-harden lifecycle-engine playbook-ledger partner-program loyalty-engine growth-optimizer meta-ads"
+KIT_SKILLS="marketing-kit growth-data journey-analytics campaign-harden lifecycle-engine playbook-ledger partner-program loyalty-engine growth-optimizer meta-ads mobile-growth"
+MKT_UPSTREAM="${MKT_UPSTREAM:-${XDG_DATA_HOME:-$HOME/.local/share}/marketing-kit/upstream}"
 
 say()  { printf '%s\n' "$*"; }
 ok()   { printf '  · %s ✓\n' "$*"; }
@@ -37,6 +41,51 @@ link_skill() {  # link_skill <src-dir> <dst-dir>
     if [ -L "$dst" ] && [ "$(readlink "$dst")" = "$src" ]; then ok "$(basename "$dst") linked"; return 0; fi
     [ -e "$dst" ] && rm -rf "$dst"          # replace a stale copy/old link
     ln -s "$src" "$dst" && ok "$(basename "$dst") → $src"
+}
+
+# ---- curated upstream skills (install/upstream-skills.tsv) ----------------------------------
+upstream_rows()  { grep -v '^#' "$1/install/upstream-skills.tsv" | awk -F'\t' 'NF>=3'; }   # ident hosts trust owns
+upstream_repos() { upstream_rows "$1" | cut -f1 | cut -d/ -f1-2 | sort -u; }
+upstream_dir()   { printf '%s/%s\n' "$MKT_UPSTREAM" "$(printf '%s' "$1" | tr '/' '_')"; }
+
+# Clone or fast-forward every upstream repo (shallow, one commit deep: always the latest HEAD).
+sync_upstream_checkouts() {  # $1 = kit root
+    local base="${MKT_GIT_BASE:-https://github.com}" repo d
+    mkdir -p "$MKT_UPSTREAM"
+    for repo in $(upstream_repos "$1"); do
+        d="$(upstream_dir "$repo")"
+        if [ -d "$d/.git" ]; then
+            if git -C "$d" fetch --depth 1 --quiet origin HEAD 2>/dev/null && git -C "$d" reset --hard --quiet FETCH_HEAD; then
+                ok "$repo @ $(git -C "$d" rev-parse --short HEAD)"
+            else warn "$repo: fetch failed — keeping $(git -C "$d" rev-parse --short HEAD 2>/dev/null)"; fi
+        else
+            git clone --depth 1 --quiet "$base/$repo.git" "$d" 2>/dev/null && ok "$repo cloned @ $(git -C "$d" rev-parse --short HEAD)" \
+                || warn "$repo: clone failed (offline?) — re-run the installer"
+        fi
+    done
+}
+
+# Link the curated skills for one host into a skills dir; prune links to skills no longer listed.
+# Never touches a real (non-symlink) dir of the same name — that is the user's own skill.
+link_upstream_skills() {  # $1 = kit root  $2 = skills dir  $3 = host (claude|hermes)
+    local ident hosts repo path n src linked=0 missing=0 l
+    mkdir -p "$2"
+    while IFS=$'\t' read -r ident hosts _; do
+        case "$hosts" in both|"$3") ;; *) continue ;; esac
+        repo="$(printf '%s' "$ident" | cut -d/ -f1-2)"; path="$(printf '%s' "$ident" | cut -d/ -f3-)"; n="${ident##*/}"
+        src="$(upstream_dir "$repo")/$path"
+        if [ ! -f "$src/SKILL.md" ]; then missing=$((missing+1)); continue; fi
+        if [ -e "$2/$n" ] && [ ! -L "$2/$n" ]; then warn "$n: a real skill dir exists in $2 — left as is"; continue; fi
+        ln -sfn "$src" "$2/$n"; linked=$((linked+1))
+    done < <(upstream_rows "$1")
+    for l in "$2"/*; do   # prune: links into the upstream store that the manifest no longer lists
+        [ -L "$l" ] || continue
+        case "$(readlink "$l")" in "$MKT_UPSTREAM"/*) ;; *) continue ;; esac
+        upstream_rows "$1" | cut -f1 | grep -q "/$(basename "$l")\$" || { rm -f "$l"; say "  · $(basename "$l") unlinked (no longer in the curated set)"; }
+    done
+    ok "$linked curated upstream skills linked into $2"
+    [ "$missing" -gt 0 ] && warn "$missing listed skills not in the local checkouts — run the kit installer (it clones them)"
+    return 0
 }
 
 link_bins() {  # $1 = kit root

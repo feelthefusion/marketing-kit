@@ -19,13 +19,16 @@
 //      replayed webhook / retried job can never double-credit (partner-program, loyalty-engine).
 //   8. Models write scores back as rows (crm_scores) — segments, commission tiers and offers
 //      read them like any other column (growth-optimizer).
+//   9. Mobile is the same brain: an app install is a device row whose install_id IS the event
+//      anon_id (same stitching as the web), push/WhatsApp/in-app are outbox channels, and a
+//      creator link survives the install through crm_app_installs (mobile-growth).
 // =============================================================================
 import {
   pgTable, text, timestamp, jsonb, boolean, integer, bigint, uuid, index, uniqueIndex, pgEnum, real, primaryKey,
 } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 
-export const channelEnum = pgEnum("crm_channel", ["email", "sms"]);
+export const channelEnum = pgEnum("crm_channel", ["email", "sms", "push", "whatsapp", "in_app"]);
 export const messageStatusEnum = pgEnum("crm_message_status", [
   "queued", "sending", "sent", "delivered", "opened", "clicked", "bounced", "failed", "complained", "skipped",
 ]);
@@ -75,7 +78,7 @@ export const crmEvents = pgTable("crm_events", {
   id: bigint("id", { mode: "number" }).primaryKey().generatedAlwaysAsIdentity(),
   contactId: uuid("contact_id").references(() => crmContacts.id, { onDelete: "cascade" }),
   name: text("name").notNull(),     // object.action, snake_case: "report.viewed", "usage.limit_90pct"
-  source: text("source").notNull(), // web (collector) | app (server code) | resend | telnyx
+  source: text("source").notNull(), // web (collector) | mobile_app (Expo app via the collector) | app (server code) | resend | telnyx
   anonId: text("anon_id"),          // browser id before login; stitched to contact_id at signup/login
   sessionId: text("session_id"),    // client-rolled, 30-min idle timeout — sessions without a sessions table
   properties: jsonb("properties").$type<Record<string, unknown>>().notNull().default({}),
@@ -127,7 +130,8 @@ export const crmMessages = pgTable("crm_messages", {
   fromAddress: text("from_address").notNull(),
   subject: text("subject"),
   body: text("body").notNull(),                       // RENDERED body, as sent
-  provider: text("provider").notNull(),               // resend | telnyx
+  payload: jsonb("payload").$type<Record<string, unknown>>(), // push: {url, data, badge} · whatsapp: {template} · in_app: {kind, cta}
+  provider: text("provider").notNull(),               // resend | telnyx | expo | webpush | inapp
   providerMessageId: text("provider_message_id"),
   status: messageStatusEnum("status").notNull().default("queued"),
   error: text("error"),
@@ -370,3 +374,48 @@ export const crmModelRuns = pgTable("crm_model_runs", {
   metrics: jsonb("metrics").$type<Record<string, unknown>>().notNull().default({}), // holdout AUC/MAE, calibration
   trainedAt: timestamp("trained_at", { withTimezone: true }).notNull().defaultNow(),
 });
+
+// --- mobile (mobile-growth) ---------------------------------------------------
+// One row per app install (iOS/Android) or push-enabled browser. install_id is generated on first
+// launch, kept in secure storage, and sent as anon_id with every event → stitchAnon() links it to
+// the contact at login exactly like a web visitor. Push tokens are provider facts: a
+// DeviceNotRegistered receipt (Expo) or a 404/410 (Web Push) flips push_status to 'revoked'.
+export const crmDevices = pgTable("crm_devices", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  contactId: uuid("contact_id").references(() => crmContacts.id, { onDelete: "cascade" }),
+  installId: text("install_id").notNull(),          // == crm_events.anon_id for this install
+  platform: text("platform").notNull(),             // ios | android | web
+  pushKind: text("push_kind"),                      // expo | webpush | null (no permission yet)
+  pushToken: text("push_token"),                    // ExponentPushToken[…] or the Web Push endpoint URL
+  pushKeys: jsonb("push_keys").$type<{ p256dh: string; auth: string }>(), // Web Push subscription keys
+  pushStatus: text("push_status").notNull().default("unknown"), // unknown | granted | denied | revoked
+  appVersion: text("app_version"),
+  osVersion: text("os_version"),
+  locale: text("locale"),
+  timezone: text("timezone"),
+  firstSeenAt: timestamp("first_seen_at", { withTimezone: true }).notNull().defaultNow(),
+  lastSeenAt: timestamp("last_seen_at", { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [
+  uniqueIndex("crm_devices_install_uq").on(t.installId),
+  uniqueIndex("crm_devices_token_uq").on(t.pushToken),
+  index("crm_devices_contact_idx").on(t.contactId),
+]);
+
+// How an install arrived. Deterministic sources first (universal/app link, Play install referrer,
+// typed code, Apple Ads token); AdAttributionKit/SKAdNetwork copies are aggregate (no install_id).
+// partner_code + claimed_at feed partner-program as the same "code|ms" value the web cookie holds.
+export const crmAppInstalls = pgTable("crm_app_installs", {
+  id: bigint("id", { mode: "number" }).primaryKey().generatedAlwaysAsIdentity(),
+  installId: text("install_id"),                    // null for AdAttributionKit / SKAdNetwork postback copies
+  source: text("source").notNull(),                 // app_link | install_referrer | code | clipboard | apple_ads | adattributionkit | skadnetwork
+  partnerCode: text("partner_code"),
+  clickId: text("click_id"),                        // the web click that led to the store (links web → app)
+  campaign: jsonb("campaign").$type<Record<string, unknown>>().notNull().default({}), // utm_* or Apple Ads ids
+  raw: jsonb("raw").$type<Record<string, unknown>>().notNull().default({}),
+  dedupeKey: text("dedupe_key").notNull(),          // install_id:source, or sha256 of a postback body
+  claimedAt: timestamp("claimed_at", { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [
+  uniqueIndex("crm_app_installs_dedupe_uq").on(t.dedupeKey),
+  index("crm_app_installs_install_idx").on(t.installId),
+  index("crm_app_installs_code_idx").on(t.partnerCode, t.claimedAt),
+]);

@@ -4,7 +4,7 @@ set -uo pipefail
 export USER="${USER:-$(id -un)}"   # node-postgres defaults the DB user to $USER (unset in bare containers)
 KIT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PF="node $KIT/bin/mkt-preflight"
-T="$(mktemp -d "${TMPDIR:-/tmp}/mkt-test.XXXXXX")"; trap 'rm -rf "$T"' EXIT
+T="$(mktemp -d "${TMPDIR:-/tmp}/mkt-test.XXXXXX")"; [ -n "${MKT_TEST_KEEP:-}" ] && echo "kept: $T" || trap 'rm -rf "$T"' EXIT
 pass=0; fail=0
 ok()  { echo "  ✓ $1"; pass=$((pass+1)); }
 bad() { echo "  ✗ $1"; fail=$((fail+1)); }
@@ -67,6 +67,13 @@ mk nometric.json      'spec.pop("primary_metric", None); spec.pop("hypothesis", 
 expect "no metric/hypothesis (optional) → GREEN"      0 "GREEN"                          $PF "$T/nometric.json"
 python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); assert d["resend"]["requests_per_second_per_team"]==10 and d["resend"]["batch_max_emails"]==100 and d["telnyx"]["sms_max_segments"]==10 and d["telnyx"]["account_mps"]["sms"]==50' "$KIT/templates/provider-limits.json" \
   && ok "provider-limits.json present + core values" || bad "provider-limits.json missing/changed"
+python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); assert d["expo_push"]["messages_per_request_max"]==100 and d["expo_push"]["payload_max_bytes"]==4096 and d["web_push"]["guaranteed_body_bytes"]==4096 and d["whatsapp"]["mps_per_number_default"]==80 and d["whatsapp"]["messaging_limit_unique_users_24h"]["new_portfolio"]==250' "$KIT/templates/provider-limits.json" \
+  && ok "provider-limits.json: Expo / Web Push / WhatsApp limits (sourced)" || bad "mobile provider limits missing"
+
+echo "▶ one marketing brain (router ↔ installed skills)"
+python3 "$KIT/tests/brain_check.py" "$KIT" >"$T/brain.log" 2>&1; n_ok=$(grep -c '^OK' "$T/brain.log")
+grep -q '^FAIL' "$T/brain.log" && { bad "brain consistency"; grep '^FAIL' "$T/brain.log"; } \
+  || ok "brain: $n_ok checks — every mapped skill installed, no duplicate names, competitors retired, every kit skill owned"
 if grep -rqiE "quiet.hours|send.window|frequency.cap|fatigue" "$KIT/templates/campaign.example.json" "$KIT/bin/mkt-preflight"; then bad "kit-imposed send restrictions still present"; else ok "no send windows / frequency caps in spec or gate"; fi
 mk write-sql.json     'spec["audience"]["sql"] = "delete from crm_contacts"'
 expect "non-SELECT audience → RED"                  1 "read-only SELECT"              $PF "$T/write-sql.json"
@@ -152,6 +159,13 @@ if [ "${MKT_TEST_SQL:-1}" = 1 ] && command -v createdb >/dev/null && command -v 
         ok "drizzle-kit DDL applies cleanly"
         psql -X -q -v ON_ERROR_STOP=1 -f "$KIT/tests/fixtures/seed.sql" "$DB" >/dev/null 2>"$T/seed.log" && ok "seeded synthetic journey" || { bad "seed"; head -5 "$T/seed.log"; }
         python3 "$KIT/tests/sql_check.py" "$DB" "$KIT" >"$T/sql.log" 2>&1 && ok "all $(grep -c '^OK' "$T/sql.log") report/cohort queries run" || { bad "SQL queries"; grep ERR "$T/sql.log"; }
+        psql -X -q -v ON_ERROR_STOP=1 -f "$KIT/tests/fixtures/mobile-seed.sql" "$DB" >/dev/null 2>"$T/mseed.log" && ok "seeded devices, vitals, installs" || { bad "mobile seed"; head -5 "$T/mseed.log"; }
+        v="$(psql -X -At -f <(sed -n '/-- 3. Core Web Vitals/,/^$/p' "$KIT/skills/mobile-growth/references/mobile.sql") "$DB" 2>&1 | tr '\n' ' ')"
+        grep -q "mobile|LCP|2800|4|50.0" <<<"$v" && grep -q "desktop|LCP|1050|2|100.0" <<<"$v" \
+          && ok "Core Web Vitals p75 per device correct (mobile LCP 2800 ms, desktop 1050 ms)" || bad "vitals p75 = $v"
+        dm="$(psql -X -At -f <(sed -n '/-- 1. Device mix/,/^$/p' "$KIT/skills/mobile-growth/references/mobile.sql") "$DB" 2>&1 | cut -d'|' -f1,2 | sort | tr '\n' ' ')"
+        [ "$(psql -X -At -c "select count(distinct session_id) from crm_events where name='page.viewed' and occurred_at > now() - interval '28 days'" "$DB")" = "$(awk -F'|' '{s+=$2} END {print s}' <<<"$(tr ' ' '\n' <<<"$dm")")" ] \
+          && ok "device mix covers every session ($dm)" || bad "device mix = $dm"
         f="$(psql -X -At -f <(sed -n '/-- 3. Funnel/,/^$/p' "$KIT/skills/journey-analytics/references/analytics.sql") "$DB" 2>/dev/null)"
         [ "$f" = "250|100|79|36" ] && ok "funnel numbers correct on the fixture (250→100→79→36)" || bad "funnel = '$f' (want 250|100|79|36)"
         echo "▶ outbox worker vs provider limits (real Postgres + mock Resend/Telnyx)"
@@ -159,15 +173,16 @@ if [ "${MKT_TEST_SQL:-1}" = 1 ] && command -v createdb >/dev/null && command -v 
         cp "$KIT/skills/lifecycle-engine/references/outbox-worker.ts" "$W/ref/"
         printf 'import { drizzle } from "drizzle-orm/node-postgres";\nexport const db = drizzle(process.env.DATABASE_URL!);\n' > "$W/db.ts"
         cp "$KIT/tests/fixtures/worker-e2e.ts" "$W/"
-        if (cd "$D" && npm i -s resend@latest telnyx@latest pg @types/pg @types/node typescript@latest tsx >/dev/null 2>&1) \
+        if (cd "$D" && npm i -s resend@latest telnyx@latest expo-server-sdk@latest web-push@latest @types/web-push qrcode@latest @types/qrcode jsqr pngjs @types/pngjs pg @types/pg @types/node typescript@latest tsx >/dev/null 2>&1) \
            && createdb "$WDB" && sed 's/--> statement-breakpoint//' "$D"/out/*.sql | psql -X -q "$WDB" >/dev/null 2>&1 \
            && psql -X -q -v ON_ERROR_STOP=1 -f "$KIT/tests/fixtures/worker-seed.sql" "$WDB" >/dev/null; then
             ln -s "$D/node_modules" "$W/node_modules"
             (cd "$W" && npx tsc --noEmit --strict --skipLibCheck --types node --module nodenext --moduleResolution nodenext \
                 --target es2022 --esModuleInterop ref/outbox-worker.ts) >"$T/wtsc.log" 2>&1 \
-                && ok "worker typechecks (strict) against latest resend + telnyx SDKs" || { bad "worker typecheck"; head -10 "$T/wtsc.log"; }
+                && ok "worker typechecks (strict) against latest resend + telnyx + expo-server-sdk + web-push" || { bad "worker typecheck"; head -10 "$T/wtsc.log"; }
             (cd "$W" && DATABASE_URL="postgres:///$WDB" WORKER="./ref/outbox-worker.ts" MOCK_PORT=4999 RESEND_API_KEY=re_test \
                 RESEND_BASE_URL=http://localhost:4999 TELNYX_API_KEY=KEYtest TELNYX_BASE_URL=http://localhost:4999/v2 PUBLIC_URL=https://x \
+                EXPO_BASE_URL=http://localhost:4999 \
                 npx tsx worker-e2e.ts) >"$T/we2e.log" 2>&1
             q() { psql -X -At "$WDB" -c "$1"; }
             [ "$(q "select count(*) from crm_messages where channel='email' and status='sent'")" = 100 ] \
@@ -179,21 +194,25 @@ if [ "${MKT_TEST_SQL:-1}" = 1 ] && command -v createdb >/dev/null && command -v 
             [ "$(q "select reason||'|'||source from crm_suppressions where value='+15550000300'")" = "opted_out|telnyx:40300" ] \
                 && ok "Telnyx 40300 recorded as provider refusal" || bad "40300 handling"
             [ "$(q "select count(*) from crm_messages where channel='sms' and status='sent'")" = 2 ] && ok "SMS sent, paced per sender" || bad "sms sent"
+            n_ok=$(grep -c '^OK' "$T/we2e.log"); n_bad=$(grep -c '^FAIL' "$T/we2e.log")
+            [ "$n_ok" -ge 8 ] && [ "$n_bad" = 0 ] && ok "push (Expo + Web Push), WhatsApp, in-app: $n_ok checks (receipts, dead tokens revoked, 40008)" \
+              || { bad "mobile channels ($n_ok ok, $n_bad fail)"; grep -vE '^OK' "$T/we2e.log" | head -12; }
         else bad "worker harness setup"; fi
         dropdb --if-exists "$WDB" >/dev/null 2>&1
 
         echo "▶ partner-program + loyalty-engine (real Postgres + mock PayPal)"
         P="$T/prog"; PDB="${DB}_p"; mkdir -p "$P/ref" "$P/sql"
         cp "$KIT"/skills/partner-program/references/{partner-tracking,payouts,creator-discovery}.ts "$KIT"/skills/loyalty-engine/references/loyalty.ts \
-           "$KIT"/skills/meta-ads/references/meta-capi.ts "$KIT"/skills/growth-optimizer/references/bandit.ts "$P/ref/"
+           "$KIT"/skills/meta-ads/references/meta-capi.ts "$KIT"/skills/growth-optimizer/references/bandit.ts \
+           "$KIT"/skills/mobile-growth/references/app-server.ts "$P/ref/"
         cp "$KIT"/skills/partner-program/references/partner.sql "$KIT"/skills/loyalty-engine/references/loyalty.sql "$P/sql/"
-        cp "$KIT"/tests/fixtures/{programs-e2e,bandit-e2e}.mts "$P/"
+        cp "$KIT"/tests/fixtures/{programs-e2e,bandit-e2e,mobile-e2e}.mts "$P/"
         ln -s "$D/node_modules" "$P/node_modules"
         pq() { psql -X -At "$PDB" -c "$1"; }
         if createdb "$PDB" && sed 's/--> statement-breakpoint//' "$D"/out/*.sql | psql -X -q -v ON_ERROR_STOP=1 "$PDB" >/dev/null 2>&1 \
            && psql -X -q -v ON_ERROR_STOP=1 -f "$KIT/tests/fixtures/programs-seed.sql" "$PDB" >/dev/null 2>"$T/pseed.log"; then
             (cd "$P" && npx tsc --noEmit --strict --skipLibCheck --types node --lib es2022,dom --module nodenext --moduleResolution nodenext \
-                --target es2022 ref/*.ts) >"$T/ptsc.log" 2>&1 && ok "6 program references typecheck (strict)" || { bad "program refs typecheck"; head -10 "$T/ptsc.log"; }
+                --target es2022 ref/*.ts) >"$T/ptsc.log" 2>&1 && ok "7 program + mobile references typecheck (strict)" || { bad "program refs typecheck"; head -10 "$T/ptsc.log"; }
             for i in 1 2; do psql -X -q -v ON_ERROR_STOP=1 -f "$P/sql/partner.sql" "$PDB" >/dev/null 2>"$T/psql.log" || bad "partner.sql run $i"; done
             [ "$(pq "select string_agg(partner_id::text||'='||s, ',' order by partner_id) from (select partner_id, sum(amount_cents) s from crm_commissions where status='approved' and payout_id is null group by 1) x")" \
               = "00000000-0000-0000-0000-0000000000a1=10050,00000000-0000-0000-0000-0000000000a2=1000" ] \
@@ -210,6 +229,10 @@ if [ "${MKT_TEST_SQL:-1}" = 1 ] && command -v createdb >/dev/null && command -v 
             n_ok=$(grep -c '^OK' "$T/be2e.log"); n_bad=$(grep -c '^FAIL' "$T/be2e.log")
             [ "$n_ok" -ge 6 ] && [ "$n_bad" = 0 ] && ok "bandit: value-weighted Thompson converges, sticky, learns on reward" \
               || { bad "bandit E2E ($n_ok ok, $n_bad fail)"; grep -v '^OK' "$T/be2e.log" | head -10; }
+            (cd "$P" && DATABASE_URL="postgres:///$PDB" npx tsx mobile-e2e.mts) >"$T/me2e.log" 2>&1
+            n_ok=$(grep -c '^OK' "$T/me2e.log"); n_bad=$(grep -c '^FAIL' "$T/me2e.log")
+            [ "$n_ok" -ge 25 ] && [ "$n_bad" = 0 ] && ok "mobile E2E: $n_ok checks (app links, QR → decoded link, install claims → creator credit, Apple Ads, AdAttributionKit, inbox, review moments)" \
+              || { bad "mobile E2E ($n_ok ok, $n_bad fail)"; grep -v '^OK' "$T/me2e.log" | head -12; }
         else bad "programs DB setup"; head -5 "$T/pseed.log"; fi
         dropdb --if-exists "$PDB" >/dev/null 2>&1
 

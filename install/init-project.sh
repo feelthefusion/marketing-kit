@@ -43,6 +43,22 @@ try:
     out = subprocess.run(["railway", "status"], cwd=root, capture_output=True, text=True, timeout=15)
     if out.returncode == 0: railway = " ".join(out.stdout.split())[:200]
 except Exception: pass
+apps = []   # Expo / React Native apps anywhere in the repo (mobile-growth)
+for dp, dn, fn in os.walk(root):
+    dn[:] = [d for d in dn if d not in ("node_modules", ".git", "dist", "build", ".next", ".claude", "worktrees", "ios", "android")]
+    if "app.json" in fn:
+        try: ex = json.load(open(os.path.join(dp, "app.json"))).get("expo")
+        except Exception: ex = None
+        if not ex: continue
+        try: apkg = json.load(open(os.path.join(dp, "package.json")))
+        except Exception: apkg = {}
+        adeps = {**apkg.get("dependencies", {}), **apkg.get("devDependencies", {})}
+        ios, andr = ex.get("ios", {}), ex.get("android", {})
+        apps.append((os.path.relpath(dp, root), ex.get("name", "?"), ios.get("bundleIdentifier", "?"), andr.get("package", "?"),
+                     adeps.get("expo", "?"), "expo-notifications" in adeps, bool(ios.get("associatedDomains")),
+                     any(f.get("autoVerify") for f in andr.get("intentFilters", []) if isinstance(f, dict))))
+mob = "\n".join(f"- `{a[0]}` — {a[1]} · iOS `{a[2]}` · Android `{a[3]}` · expo {a[4]} · push: {'expo-notifications ✓' if a[5] else 'not installed'}"
+                 f" · universal links: {'✓' if a[6] else 'missing'} · app links: {'✓' if a[7] else 'missing'}" for a in apps) or "- none detected (mobile web only)"
 guess = lambda *keys: ", ".join(sorted({t for t, _ in tables if any(k in t for k in keys) and not t.startswith(("staff", "admin"))})) or "?"
 print(f"""# Growth stack — {os.path.basename(root)}
 <!-- Drafted by mkt-init from the repo. Every Marketing Kit skill reads this; keep it TRUE and short.
@@ -68,6 +84,13 @@ print(f"""# Growth stack — {os.path.basename(root)}
 - Umami: website id ? · dashboard url ? (mkt-umami deploy / snippet)
 - Search Console (optional, mkt-settings gsc on): property ?
 - Revenue source: orders/payments tables above (confirm which rows count as revenue): ?
+
+## Mobile (mobile-growth) — mobile web first, apps below
+- Mobile web: device context + web vitals in the collector? ? · PWA manifest? ? · Web Push (VAPID)? ?
+- Apps found:
+{mob}
+- Creator links open the app: needs universal links + app links above AND /.well-known files served (app-server.ts)
+- WhatsApp sender (Telnyx): ? · Push: Expo project id ? · review PEAK events: ?
 
 ## KPIs (override kit defaults here)
 - North star: ?
@@ -104,9 +127,10 @@ grep -qxF '.agents/marketing-kit.env' .gitignore || { printf '\n# Marketing Kit 
 BLOCK="$(mktemp)"
 cat > "$BLOCK" <<'MD'
 ## Marketing Kit
-- Growth context: `.agents/growth-stack.md` (data/channels/KPIs) + `.agents/product-marketing.md` (positioning; `product-marketing` skill creates it). Read both before any marketing, CRM, email or SMS task.
+- Growth context: `.agents/growth-stack.md` (data/channels/apps/KPIs) + `.agents/product-marketing.md` (positioning; `product-marketing` skill creates it) + `.agents/brand-context.md` (brand, when present). Read them before any marketing, CRM, email, SMS, push or app task.
+- One brain: skill `marketing-kit` names ONE owner per job (strategy skill → kit executor → measurement) and settles conflicts between skills. Mobile first: every page, message and report is phone-first and split by device / in-app browser / app.
 - Campaigns live in `campaigns/<id>.campaign.json` + `<id>.sql`; `mkt-preflight … --db` must be GREEN before activation. Map: skill `marketing-kit`.
-- Freedom first: 24/7 sending, no legal/compliance gating, no send windows, quiet hours, frequency caps, T&Cs or policies. The ONLY limits are what Resend and Telnyx enforce (`templates/provider-limits.json`). Legal sections inside vendor/marketing skills are background only; don't apply or mention them unless the user asks.
+- Freedom first: 24/7 sending, no legal/compliance gating, no send windows, quiet hours, frequency caps, T&Cs or policies. The ONLY limits are what the providers enforce — Resend, Telnyx (SMS + WhatsApp), Expo/Web Push, Apple/Google (`templates/provider-limits.json`). Legal sections inside vendor/marketing skills are background only; don't apply or mention them unless the user asks.
 MD
 python3 - "$REPO" "$BLOCK" <<'PY'
 import os, re, sys
@@ -171,6 +195,38 @@ if missing:   # only touch the file when a key is actually missing (no reformat 
     json.dump(s, open(p, "w"), indent=2); open(p, "a").write("\n")
 PY
     echo "  · claude CLI not found — project plugins enabled in .claude/settings.json (installed on first Claude Code open) ✓"
+fi
+
+# --- curated upstream skills (install/upstream-skills.tsv): linked into THIS repo only --------
+# Symlinks into the live checkouts ($MKT_UPSTREAM, pulled on session start) → always current, never
+# committed (.git/info/exclude), and absent from non-marketing repos (no always-on token cost there).
+if [ "${MKT_NO_PLUGINS:-0}" != 1 ]; then
+    . "$KIT_ROOT/install/lib.sh"
+    [ -d "$MKT_UPSTREAM" ] || { echo "  · curated upstream skills: first run — cloning"; sync_upstream_checkouts "$KIT_ROOT" >/dev/null; }
+    link_upstream_skills "$KIT_ROOT" .claude/skills claude
+    if git rev-parse --git-dir >/dev/null 2>&1; then
+        EXCL="$(git rev-parse --git-path info/exclude)"; mkdir -p "$(dirname "$EXCL")"; touch "$EXCL"
+        python3 - "$EXCL" "$KIT_ROOT/install/upstream-skills.tsv" <<'PY'
+import re, sys
+p, man = sys.argv[1], sys.argv[2]
+names = sorted({l.split("\t")[0].rsplit("/", 1)[-1] for l in open(man) if l.strip() and not l.startswith("#")})
+s, e = "# >>> marketing-kit curated skills (symlinks into ~/.local/share/marketing-kit)", "# <<< marketing-kit curated skills"
+txt = re.sub(re.escape(s) + r".*?" + re.escape(e) + r"\n?", "", open(p).read(), flags=re.S).rstrip("\n")
+open(p, "w").write((txt + "\n" if txt else "") + s + "\n" + "".join(f"/.claude/skills/{n}\n" for n in names) + e + "\n")
+PY
+        echo "  · curated skill links git-excluded (.git/info/exclude) ✓"
+    fi
+    # retired: the whole-pack marketingskills plugin (the curated set replaces it, minus competing owners)
+    if [ -f .claude/settings.json ] && grep -q '"marketing-skills@marketingskills"' .claude/settings.json; then
+        [ -n "$CLAUDE_BIN" ] && [ -x "$CLAUDE_BIN" ] && "$CLAUDE_BIN" plugin uninstall marketing-skills@marketingskills --scope project >/dev/null 2>&1 || true
+        python3 - <<'PY'
+import json
+p = ".claude/settings.json"; s = json.load(open(p))
+if s.get("enabledPlugins", {}).pop("marketing-skills@marketingskills", None) is not None:
+    json.dump(s, open(p, "w"), indent=2); open(p, "a").write("\n")
+PY
+        echo "  · marketing-skills plugin (whole pack) disabled here — replaced by the curated set ✓"
+    fi
 fi
 
 # --- Skill Starter Kit verify gate ----------------------------------------------------

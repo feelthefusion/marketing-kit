@@ -1,7 +1,8 @@
 # Marketing Kit
 
 A growth-engine skill stack for **Claude Code** and **Hermes** that fits apps which **own their
-CRM**: Postgres on Railway (Drizzle), email through **Resend**, SMS through **Telnyx**. There's no
+CRM**: Postgres on Railway (Drizzle), email through **Resend**, SMS + WhatsApp through **Telnyx**,
+push through **Expo Push / Web Push**, mobile web and Expo apps treated as first-class. There's no
 third-party CRM, analytics or automation SaaS. **Every customer number comes from the site
 itself and its own databases**: events the site writes to its own Postgres, its own
 orders/payments, and a self-hosted Umami dashboard. The agent writes copy against that data and
@@ -33,9 +34,10 @@ mkt-doctor      # every gap on this machine and in this repo, with the fix comma
 
 | What | How it stays live |
 |------|-------------------|
-| Kit skills (6) | **symlinked** from `~/.marketing-kit`, which bootstrap `git pull`s every run |
-| Vendor skills | Claude Code: **plugins from each vendor's own marketplace**, `marketplace update` + `plugin update` every run. Hermes: **hub installs from the vendor repo**, `hermes skills update` every run |
-| Context budget | Heavy plugins load **per repo** (`mkt-init` enables them in `.claude/settings.json`), so coding-only sessions don't pay ~13k tokens for 70 marketing skills. Measured with `claude plugin details` |
+| Kit skills (11) | **symlinked** from `~/.marketing-kit`, which bootstrap `git pull`s every run |
+| Curated upstream skills (73) | one list for both hosts, [`install/upstream-skills.tsv`](install/upstream-skills.tsv). Claude Code: shallow **live checkouts** (pulled on session start) **symlinked per repo** by `mkt-init`. Hermes: hub installs + `hermes skills update`. Only listed skills exist, so nothing duplicates. (Claude Code can't switch off single skills inside a plugin, so whole packs can't be curated.) |
+| Vendor packs | Resend, Telnyx (SMS + WhatsApp), Hyperframes, Humanizer. Claude Code: **plugins from each vendor's own marketplace**, updated every run. Hermes: **hub installs from the vendor repo** |
+| Context budget | Marketing skills load **per repo** (`mkt-init` links them into `.claude/skills`, git-excluded), so coding-only sessions don't pay for them |
 | MCP servers | `mkt-mcp <name>` runs `npx pkg@latest` / `uvx pkg@latest` on every launch |
 | Supermemory | the official installer; an existing server (e.g. from Starter Kit) gets reused |
 
@@ -47,7 +49,7 @@ Sending is **24/7 with no restrictions**. The kit has no legal or compliance gat
 windows or quiet hours, no frequency caps, and no terms or policies. The agent is told to treat
 legal notes inside vendor skills as background only.
 
-The **only** limits are the ones Resend and Telnyx enforce themselves. They are listed with
+The **only** limits are the ones the providers enforce themselves (Resend, Telnyx, Expo, Web Push, WhatsApp, Apple/Google). They are listed with
 source links in [`templates/provider-limits.json`](templates/provider-limits.json), and the
 outbox worker paces to them exactly.
 
@@ -57,9 +59,37 @@ outbox worker paces to them exactly.
 | Resend | won't deliver to hard-bounced or spam-complaint addresses | skips them (they'd fail) |
 | Telnyx | 50 SMS/s per account; toll-free 20/s, short code 1,000/s, US long code = your 10DLC class; 4h queue | paces per number + account (`TELNYX_SENDER_MPS` for 10DLC) |
 | Telnyx | ≤10 segments (40302), MMS ≤10 media/1 MB (40317), refuses STOP'd (40300) and non-routable (40001) numbers | preflight catches size limits; the worker records refusals so it stops paying to retry |
+| WhatsApp (via Telnyx) | 80 msg/s per number (up to 1,000); 250 → 2K → 10K → 100K → unlimited unique people per 24h outside the service window; templates only outside it (40008) | paces per number (`WHATSAPP_MPS`), sends `payload.template` when set |
+| Expo Push | ≤100 per request, 4096-byte payload, receipts after ~15 min, `DeviceNotRegistered` | SDK chunks; the worker checks receipts in its loop and revokes dead tokens |
+| Web Push | bodies ≤4096 bytes guaranteed (RFC 8030); 404/410 = gone; iPhone only for Home Screen web apps (iOS 16.4+) | encrypts + VAPID-signs, revokes gone subscriptions, retries 429 |
+| Apple | review prompt shown ≤3× per 365 days; AdServices token valid 24h | `reviewMoment()` spends the prompts on peak moments only |
 
 `send.exclude` overrides the skip list per campaign, and `[]` skips nothing.
 
+
+## One marketing brain
+
+Every task passes three layers, and each job has **one** owner per layer
+([`skills/marketing-kit/SKILL.md`](skills/marketing-kit/SKILL.md)):
+
+| Layer | Who | Does |
+|---|---|---|
+| Think | 73 curated strategy skills: [marketingskills](https://github.com/coreyhaines31/marketingskills) (48), [appeeky/aso-skills](https://github.com/appeeky/aso-skills) (11), [rorkai asc skills](https://github.com/rorkai/app-store-connect-cli-skills) (10, Apple's API), brand (3), [last30days](https://github.com/mvanhorn/last30days-skill) (live social listening) | diagnose, pick the play, draft, design the test |
+| Do | the kit's owners on **your** stack | build, send, attribute, pay: `lifecycle-engine`, `partner-program`, `loyalty-engine`, `mobile-growth`, `meta-ads` |
+| Learn | `journey-analytics` · `growth-optimizer` · `playbook-ledger` | lift from real orders, scores/arms, memory |
+
+- **One writer per table and channel.** For example, only `lifecycle-engine` sends, and only `partner-program` writes commissions.
+- **Conflict rules decide overlaps.** When a strategy skill names GA4, HubSpot, Klaviyo, Twilio, Branch or a cron job, the idea stands and the tool is translated to the owner.
+- **Two competing upstream skills are deliberately not installed:** `analytics` (GA4-first) and `revops` (HubSpot-first).
+- **`tests/brain_check.py` fails the build if:** the map names a skill that isn't installed, two installed skills share a name, or a kit skill has no owner.
+
+## Mobile first: mobile web and the app
+
+| Lane | What ships |
+|---|---|
+| Mobile web (every site) | device / OS / in-app browser (Instagram, TikTok…) / PWA on every event; real-user Core Web Vitals; PWA + Web Push; mobile page rules (thumb-zone CTA, wallet pay, inputs, no intrusive interstitials); smart app banner; tap-to-text / WhatsApp |
+| Native app (Expo) | universal links + app links (`/r/<code>` opens the app); install claims that keep the creator's credit (Play install referrer, app link, code, clipboard) feeding the same `attributeOrder()`; Expo Push; in-app inbox; review moments; Apple Ads + AdAttributionKit copies |
+| Both | `mobile.sql`: device mix, in-app browsers, vitals p75, checkout drop-off, PWA retention, installs by creator, push reach, channel scoreboard, web→app handoff |
 
 ## Living updates (always latest, no timers)
 
@@ -89,15 +119,16 @@ MKT_UPDATE=off                 # disable
 | 1 | **playbook-ledger** + Supermemory | local server `:6767` · `mkt-ledger` | ICPs, voice, offers, campaign lift, seasonal plays. Recalled first, saved last. Shared by both hosts |
 | 2 | **growth-data** + `crm-db` + `railway` MCP | [crystaldba/postgres-mcp](https://github.com/crystaldba/postgres-mcp) · Railway CLI `railway mcp` | CRM schema (Drizzle reference), identity stitching, cohort SQL. Resolves **the current repo's** DB. Read-only by default |
 | 3 | **journey-analytics** + first-party collector + `umami` MCP · optional `gsc` | this kit (collector: `/api/t` → `crm_events`) · [umami-software/umami](https://github.com/umami-software/umami) self-hosted on your Railway (`ghcr.io/…/umami:latest`) · [AminForou/mcp-gsc](https://github.com/AminForou/mcp-gsc) behind a switch | traffic → behavior → revenue from your own data, one join key, holdout-based lift |
-| 4 | Marketing skills | [coreyhaines31/marketingskills](https://github.com/coreyhaines31/marketingskills) | strategy + drafts: copywriting, emails, sms, churn-prevention, pricing, offers, ab-testing, attribution, … |
+| 4 | Curated strategy skills (73) | `install/upstream-skills.tsv`: marketingskills, appeeky ASO, rorkai App Store Connect, brand, last30days | strategy + drafts for every discipline (see *One marketing brain*) |
 | 5 | Humanizer | [blader/humanizer](https://github.com/blader/humanizer) (Hermes: bundled port) | strips AI tells from customer-facing copy |
 | 6 | **campaign-harden** + `mkt-preflight` | this kit | persona grill with evidence, claim check, and a deterministic gate for schema, variables, UTMs and SMS segments |
-| 7 | **lifecycle-engine** + Resend + Telnyx | [resend/resend-skills](https://github.com/resend/resend-skills) (official, hosted MCP) · [team-telnyx/ai](https://github.com/team-telnyx/ai) (official) + `@telnyx/mcp` | triggers, enrollment with holdout, idempotent outbox, verified webhooks, all in your own code |
+| 7 | **lifecycle-engine** + Resend + Telnyx + Expo/Web Push | [resend/resend-skills](https://github.com/resend/resend-skills) (official, hosted MCP) · [team-telnyx/ai](https://github.com/team-telnyx/ai) (official: SMS + WhatsApp) + `@telnyx/mcp` · [expo-server-sdk](https://github.com/expo/expo-server-sdk-node) · [web-push](https://github.com/web-push-libs/web-push) | one outbox for email, SMS, WhatsApp, push and in-app: triggers, holdouts, idempotent sends, receipts, verified webhooks, all in your own code |
 | 8 | **partner-program** | this kit + `influencer-marketing`, `referrals`, `co-marketing` | creators, influencers, affiliates, customer referrals: codes + `?ref` links, attribution, tiered commissions, clawbacks, payouts, creator discovery |
 | 9 | **loyalty-engine** | this kit | points, tiers on 12-month spend, rewards, store credit, tier-progress nudges |
 | 10 | **meta-ads** | Meta's official hosted Ads MCP (optional) + `ads`, `ad-creative` | Partnership Ads from top creators, Conversions API from your orders, value lookalikes |
 | 11 | **growth-optimizer** + `mkt-optimize` | this kit (`uv` script, scikit-learn) | churn / CLV / partner / prospect scores and bandits that learn from your sales |
-| — | **marketing-kit** | this kit | the workflow map; loads on any growth/CRM/email/SMS/partner/loyalty task |
+| 12 | **mobile-growth** | this kit + `aso`, `asc-*`, appeeky skills | mobile web + Expo apps: devices, app links, install claims, push registration, inbox, review moments, PWA, mobile reports |
+| — | **marketing-kit** | this kit | the brain: owners, conflict rules, shared context; loads on any growth task |
 
 ### The revenue engine: creators, referrals and loyalty first, ads second
 
@@ -204,7 +235,7 @@ To use a read-only DB role (recommended), run the SQL in
 
 ```
 skills/            marketing-kit · growth-data · journey-analytics · campaign-harden · lifecycle-engine · playbook-ledger
-                   partner-program · loyalty-engine · growth-optimizer · meta-ads
+                   partner-program · loyalty-engine · growth-optimizer · meta-ads · mobile-growth
   growth-data/references/     crm-schema.ts (Drizzle) · cohorts.sql · readonly-role.sql
   journey-analytics/references/ first-party-tracking.ts · analytics.sql · umami.md · search-console.md
   lifecycle-engine/references/ outbox-worker.ts · webhooks.ts
@@ -212,13 +243,16 @@ skills/            marketing-kit · growth-data · journey-analytics · campaign
   loyalty-engine/references/   loyalty.sql · loyalty.ts
   growth-optimizer/            scripts/optimize.py · references/bandit.ts · references/optimizer.sql
   meta-ads/references/         meta-capi.ts
+  mobile-growth/references/    app-server.ts · app-client.md (Expo + PWA) · mobile.sql
 bin/               mkt-mcp · mkt-preflight · mkt-ledger · mkt-doctor · mkt-settings · mkt-umami · mkt-update · mkt-webhooks · mkt-optimize
 install/           bootstrap.sh · install.sh (Claude Code) · hermes.sh · init-project.sh (mkt-init)
-                   claude-plugins.tsv · hermes-skills.tsv   ← the vendor manifest
+                   upstream-skills.tsv ← the curated set (both hosts) · claude-plugins.tsv · hermes-skills.tsv ← vendor packs
 templates/         campaign.example.json · secrets.env.example · marketing-kit.env · banned-phrases.txt
 tests/run.sh       preflight, DB resolution, switches, Umami, mkt-init idempotency, verify gating, ledger,
                    schema typecheck, and every analytics/cohort query on a real seeded Postgres;
-                   outbox worker, partner/loyalty money paths (mock PayPal), bandit, optimizer on synthetic history
+                   outbox worker on every channel (mock Resend/Telnyx/Expo/Web Push), partner/loyalty money paths
+                   (mock PayPal), mobile E2E (app links, install claims → creator credit, Apple Ads, AdAttributionKit),
+                   brain consistency, bandit, optimizer on synthetic history
 ```
 
 ## Verify

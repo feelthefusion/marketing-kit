@@ -1,6 +1,6 @@
 ---
 name: journey-analytics
-description: "Use when measuring or explaining the customer journey or revenue — traffic sources, landing pages, funnels, activation, retention, churn signals, feature-limit hits, campaign lift, attribution, LTV — from FIRST-PARTY data only: events the site writes to its own Postgres (crm_events), the app's own orders/payments, the self-hosted Umami dashboard, and (optional switch) Google Search Console. Covers the collector, the identity stitch, KPI definitions and holdout lift so every number traces to a query."
+description: "Use when measuring or explaining the customer journey or revenue — traffic sources, landing pages, funnels, activation, retention, churn signals, feature-limit hits, campaign lift, attribution, LTV — from FIRST-PARTY data only: events the site writes to its own Postgres (crm_events), the app's own orders/payments, the self-hosted Umami dashboard, and (optional switch) Google Search Console. Every report splits mobile vs desktop, Instagram/TikTok in-app browsers and the app; real-user Core Web Vitals per device. Covers the collector, the identity stitch, KPI definitions and holdout lift so every number traces to a query. Implementation owner for tracking + attribution (never GA4/GTM/Segment/PostHog)."
 ---
 
 # Journey Analytics (listen → measure), first-party only

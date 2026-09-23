@@ -4,37 +4,13 @@
 # `official` = the vendor's own org (resend/, team-telnyx/). Hermes' scanner flags normal
 # API-client patterns in them (env API keys, HTTP sends); the same skills ship in the vendors' Claude
 # Code plugins, so they install with --force. Community skills never get --force.
-# Not listed: marketingskills `ads` — Hermes' scanner blocks it (a CRITICAL prompt-injection match in
-# references/audit-guardrails.md; no override exists). Claude Code gets it via the plugin; on Hermes
-# the kit's meta-ads skill + ad-creative cover paid social. Re-add when upstream changes that file.
+# VENDOR PACKS only (Claude Code gets the same ones as plugins). The curated strategy/mobile/brand
+# skills for both hosts live in install/upstream-skills.tsv (hermes.sh installs those rows too).
 # identifier	kit component	trust
-coreyhaines31/marketingskills/skills/product-marketing	4	community
-coreyhaines31/marketingskills/skills/customer-research	4	community
-coreyhaines31/marketingskills/skills/copywriting	4	community
-coreyhaines31/marketingskills/skills/copy-editing	4	community
-coreyhaines31/marketingskills/skills/emails	4	community
-coreyhaines31/marketingskills/skills/sms	4	community
-coreyhaines31/marketingskills/skills/churn-prevention	4	community
-coreyhaines31/marketingskills/skills/onboarding	4	community
-coreyhaines31/marketingskills/skills/pricing	4	community
-coreyhaines31/marketingskills/skills/offers	4	community
-coreyhaines31/marketingskills/skills/paywalls	4	community
-coreyhaines31/marketingskills/skills/referrals	4	community
-coreyhaines31/marketingskills/skills/ab-testing	4	community
-coreyhaines31/marketingskills/skills/analytics	4	community
-coreyhaines31/marketingskills/skills/attribution	4	community
-coreyhaines31/marketingskills/skills/marketing-psychology	4	community
-coreyhaines31/marketingskills/skills/marketing-loops	4	community
-coreyhaines31/marketingskills/skills/revops	4	community
-coreyhaines31/marketingskills/skills/cro	4	community
-coreyhaines31/marketingskills/skills/signup	4	community
-coreyhaines31/marketingskills/skills/influencer-marketing	4	community
-coreyhaines31/marketingskills/skills/ad-creative	4	community
-coreyhaines31/marketingskills/skills/co-marketing	4	community
-coreyhaines31/marketingskills/skills/community-marketing	4	community
-coreyhaines31/marketingskills/skills/marketing-ideas	4	community
 resend/resend-skills/skills/resend	7	official
 resend/resend-skills/skills/react-email	7	official
 resend/resend-skills/skills/email-best-practices	7	official
 team-telnyx/ai/providers/claude/plugins/telnyx-messaging/skills/telnyx-messaging-javascript	7	official
 team-telnyx/ai/providers/claude/plugins/telnyx-messaging/skills/telnyx-messaging-profiles-javascript	7	official
+team-telnyx/ai/providers/claude/plugins/telnyx-whatsapp/skills/telnyx-whatsapp-javascript	7	official
+official/creative/hyperframes	4	official

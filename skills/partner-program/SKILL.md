@@ -1,6 +1,6 @@
 ---
 name: partner-program
-description: "Use when building, running, or optimizing affiliate, creator, influencer, ambassador or customer-referral programs in the app's own CRM: partner codes and ?ref links, attribution (code beats cookie, recurring credit), tiered commissions, clawbacks on refunds, payouts (store credit, PayPal, Venmo, Cash App, Zelle), creator discovery (YouTube, Instagram, TikTok One), outreach pipeline, partner scorecards and leaderboards."
+description: "Use when building, running, or optimizing affiliate, creator, influencer, ambassador or customer-referral programs in the app's own CRM: partner codes and ?ref links, attribution (code beats cookie, recurring credit), tiered commissions, clawbacks on refunds, payouts (store credit, PayPal, Venmo, Cash App, Zelle), creator discovery (YouTube, Instagram, TikTok One), outreach pipeline, partner scorecards and leaderboards, QR codes, and creator links that keep their credit through an app install (mobile-growth). Execution owner — program strategy comes from influencer-marketing / referrals / co-marketing."
 ---
 
 # Partner Program (creators · influencers · affiliates · customer referrals)
@@ -19,7 +19,7 @@ deal structures), `referrals` (referral loops, double-sided rewards), `co-market
 | Piece | File | What it does |
 |---|---|---|
 | Schema | growth-data `references/crm-schema.ts` | plans, partners, codes, attributions, commissions, payouts, store credit, prospects |
-| Tracking | `references/partner-tracking.ts` | `?ref=` cookie + `partner.clicked`, `/r/<code>` short links, `attributeOrder()` inside the order transaction |
+| Tracking | `references/partner-tracking.ts` | `?ref=` cookie + `partner.clicked`, `/r/<code>` short links (carry `utm_*`), `partnerQr()` printable QR of the same link (SVG / PNG, `utm_source=qr`), `attributeOrder()` inside the order transaction |
 | Money | `references/partner.sql` | 1 accrue (tier rate at order time) · 2 claw back refunds proportionally · 3 approve after hold · 4 payable · 5 scorecard |
 | Payouts | `references/payouts.ts` | store credit (instant) · PayPal + Venmo (Payouts API, one idempotent batch) · Cash App + Zelle (pay sheet + `markPaid`) |
 | Discovery | `references/creator-discovery.ts` | YouTube Data API, Instagram business_discovery, TikTok One → `crm_creator_prospects` |
@@ -36,7 +36,8 @@ A partner buying through their own code isn't attributed.
 ## Techniques that drive most sales (apply in this order)
 
 1. **Code + link, always both.** Creators' audiences type codes they heard in a video; links
-   die in bios and stories. Each partner gets a vanity code (`MAYA`) *and* `/r/maya`. The code
+   die in bios and stories. Each partner gets a vanity code (`MAYA`) *and* `/r/maya`, plus a QR of
+   the same link (`/r/maya/qr`) for packaging, stickers, events and on-screen in videos. The code
    gives the audience a discount (`customer_discount_bps`) — that's the reason to use it.
 2. **Tiered commission that ratchets** (`tiers` on the plan: e.g. 10% → 15% at $1k/30 days →
    20% at $5k). Creators push harder when the next tier is close; `partner.sql` pays the tier

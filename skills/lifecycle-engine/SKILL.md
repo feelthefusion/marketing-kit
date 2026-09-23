@@ -1,6 +1,6 @@
 ---
 name: lifecycle-engine
-description: "Use when building, changing, or running triggered or automated campaigns, drip sequences, broadcasts, transactional messages, or delivery infrastructure in the app's own code with Resend (email) and Telnyx (SMS): trigger rules, enrollment, holdouts, outbox worker, idempotent sends, scheduling, delivery + inbound webhooks, and test sends. Also for ad-hoc sends through the Resend/Telnyx MCP servers."
+description: "Use when building, changing, or running triggered or automated campaigns, drip sequences, broadcasts, transactional messages, or delivery infrastructure in the app's own code — the ONE sender for every channel: Resend (email), Telnyx (SMS + WhatsApp), Expo Push + Web Push (push) and the in-app inbox: trigger rules, enrollment, holdouts, outbox worker, idempotent sends, scheduling, delivery + inbound webhooks, push receipts, test sends. Execution owner — strategy and copy come from emails / sms / churn-prevention / onboarding. Also for ad-hoc sends through the Resend/Telnyx MCP servers."
 ---
 
 # Lifecycle Engine (triggered + automated delivery, in your own code)
@@ -9,6 +9,14 @@ No automation SaaS: the app evaluates rules against its own DB, enrolls contacts
 an outbox through Resend and Telnyx. The provider skills (`resend`, `react-email`,
 `email-best-practices`, `telnyx-messaging-javascript`) hold current SDK/API detail — load
 them before writing a provider call; this skill holds the architecture.
+
+**Channels (one outbox, one worker):** `email` → Resend · `sms` → Telnyx · `whatsapp` → Telnyx
+(`client.messages.whatsapp`; free-form inside the 24h window, else `payload.template`) · `push` →
+Expo Push for the native app / Web Push for PWAs and browsers (`to_address` = `crm_devices.id`, one row
+per granted device, receipts checked ~15 min later in the same loop, dead tokens revoke the device) ·
+`in_app` → no provider, the row is the inbox item (`mobile-growth` → `inbox()`). Deep links go in
+`payload.url` (`/a/*` paths open the app when installed). Pick the channel per contact with a
+`growth-optimizer` arm; pacing is only what each provider enforces (`templates/provider-limits.json`).
 
 ## Architecture (five pieces, each idempotent)
 

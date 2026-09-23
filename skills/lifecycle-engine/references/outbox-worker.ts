@@ -1,5 +1,6 @@
 // =============================================================================
-// Reference outbox worker — Resend (email) + Telnyx (SMS), Drizzle + pg, Railway.
+// Reference outbox worker — ONE outbox for every channel: Resend (email), Telnyx (SMS + WhatsApp),
+// Expo Push + Web Push (push), and the app's own inbox (in_app). Drizzle + pg, Railway.
 // Pattern, not a drop-in: adapt table/column names to the app (growth-data schema).
 // Before editing: `resend` and `telnyx-messaging-javascript` skills hold the CURRENT SDK
 // signatures — check them (docs-freshness) rather than trusting this file's calls.
@@ -13,6 +14,11 @@
 //   Telnyx  account 50 SMS/s, 15 MMS/s · per sender: toll-free 20/s, short code 1,000/s,
 //           US long code = your 10DLC class (set TELNYX_SENDER_MPS) · queue holds 4h (40318 full)
 //           · ≤10 segments · refuses STOP'd (40300) and non-routable (40001) numbers
+//           WhatsApp: same account; free-form only inside the 24h window, else an approved
+//           template (payload.template) · 40008 = template not usable
+//   Expo    ≤100 messages per request (SDK chunks) · payload ≤4096 bytes · SDK caps at 6
+//           concurrent connections · receipts ~15 min later; DeviceNotRegistered = stop
+//   WebPush endpoint 404/410 = subscription gone · 413 = payload too large · 429 = retry-after
 //
 // Guarantees:
 //   * at-most-once per idempotency key: the unique index on crm_messages.idempotency_key is the
@@ -24,11 +30,14 @@
 import { createHash } from "node:crypto";
 import { Resend } from "resend";
 import Telnyx from "telnyx";
+import { Expo, type ExpoPushMessage, type ExpoPushTicket } from "expo-server-sdk";
+import webpush from "web-push";
 import { sql } from "drizzle-orm";
 import { db } from "../db"; // the app's drizzle instance
 
 const resend = new Resend(process.env.RESEND_API_KEY);
 const telnyx = new Telnyx({ apiKey: process.env.TELNYX_API_KEY! });
+const expo = new Expo({ accessToken: process.env.EXPO_ACCESS_TOKEN });   // token only if "enhanced security" is on
 
 // ── provider limits (templates/provider-limits.json) ────────────────────────────────────────────
 const RESEND_RPS = Number(process.env.RESEND_RPS ?? 10);       // your team's limit (Settings → Usage)
@@ -62,6 +71,9 @@ export class Bucket {
 const resendBucket = new Bucket(RESEND_RPS, RESEND_RPS);   // Resend: no burst above the per-second limit
 const telnyxAccount = new Bucket(TELNYX_ACCOUNT_SMS_MPS);
 const telnyxSenders = new Map<string, Bucket>();
+const WHATSAPP_MPS = Number(process.env.WHATSAPP_MPS ?? 80);   // per business number (Meta default throughput)
+const waSenders = new Map<string, Bucket>();
+const waBucket = (from: string) => waSenders.get(from) ?? waSenders.set(from, new Bucket(WHATSAPP_MPS)).get(from)!;
 const senderBucket = (from: string) =>
   telnyxSenders.get(from) ?? telnyxSenders.set(from, new Bucket(senderMps(from))).get(from)!;
 
@@ -83,9 +95,11 @@ async function excludeFor(campaignId: string | null): Promise<string[]> {
   return excludeCache.get(campaignId)!;
 }
 
+export type Channel = "email" | "sms" | "push" | "whatsapp" | "in_app";
 type Claimed = {
-  id: string; idempotency_key: string; channel: "email" | "sms"; to_address: string;
+  id: string; idempotency_key: string; channel: Channel; to_address: string; provider: string;
   from_address: string; subject: string | null; body: string; campaign_id: string | null;
+  payload: Record<string, any> | null;
 };
 
 export async function drainOutbox(claim = 500) {
@@ -102,7 +116,8 @@ export async function drainOutbox(claim = 500) {
       order by scheduled_for
       for update skip locked
       limit ${claim})
-    returning m.id, m.idempotency_key, m.channel, m.to_address, m.from_address, m.subject, m.body, m.campaign_id`);
+    returning m.id, m.idempotency_key, m.channel, m.to_address, m.from_address, m.subject, m.body, m.campaign_id,
+              m.provider, m.payload`);
 
   // 2. skip what the provider would refuse anyway (or what the campaign's own exclude lists)
   const ready: Claimed[] = [];
@@ -121,9 +136,19 @@ export async function drainOutbox(claim = 500) {
   const emails = ready.filter((m) => m.channel === "email");
   for (let i = 0; i < emails.length; i += RESEND_BATCH_MAX) await sendEmailChunk(emails.slice(i, i + RESEND_BATCH_MAX));
 
-  // 4. SMS → Telnyx, paced per sender number and per account (senders run in parallel)
-  const bySender = groupBy(ready.filter((m) => m.channel === "sms"), (m) => m.from_address);
-  await Promise.all([...bySender.values()].map(async (msgs) => { for (const m of msgs) await sendSms(m); }));
+  // 4. SMS + WhatsApp → Telnyx, paced per sender number and per account (senders run in parallel)
+  const bySender = groupBy(ready.filter((m) => m.channel === "sms" || m.channel === "whatsapp"), (m) => `${m.channel}:${m.from_address}`);
+  await Promise.all([...bySender.values()].map(async (msgs) => { for (const m of msgs) await sendTelnyx(m); }));
+
+  // 5. push → Expo Push (native apps) / Web Push (browsers + home-screen PWAs). to_address = crm_devices.id
+  const push = ready.filter((m) => m.channel === "push");
+  if (push.length) await sendPush(push);
+
+  // 6. in_app → nothing to call: the row IS the inbox item (mobile-growth inbox route reads it)
+  for (const m of ready.filter((m) => m.channel === "in_app")) await mark(m.id, "sent");
+
+  // 7. Expo receipts for pushes sent ≥15 min ago (Expo's recommended wait) — part of the loop, no timer
+  await processPushReceipts();
   return rows.length;
 }
 
@@ -155,14 +180,20 @@ async function sendEmailChunk(chunk: Claimed[]) {
   }
 }
 
-async function sendSms(m: Claimed) {
-  await senderBucket(m.from_address).take();
-  await telnyxAccount.take();
+async function sendTelnyx(m: Claimed) {
+  if (m.channel === "whatsapp") await waBucket(m.from_address).take();
+  else { await senderBucket(m.from_address).take(); await telnyxAccount.take(); }
+  const webhook_url = `${process.env.PUBLIC_URL}/webhooks/telnyx`;
   try {
-    const res: any = await telnyx.messages.send({
-      from: m.from_address, to: m.to_address, text: m.body,
-      webhook_url: `${process.env.PUBLIC_URL}/webhooks/telnyx`,
-    });
+    const res: any = m.channel === "whatsapp"
+      ? await telnyx.messages.whatsapp({
+          from: m.from_address, to: m.to_address, webhook_url,
+          // outside the 24h customer-service window Meta only delivers approved templates
+          whatsapp_message: m.payload?.template
+            ? { type: "template", template: m.payload.template }
+            : { type: "text", text: { body: m.body, preview_url: true } },
+        } as any)
+      : await telnyx.messages.send({ from: m.from_address, to: m.to_address, text: m.body, webhook_url });
     const d = res?.data ?? res;
     await mark(m.id, "sent", { providerMessageId: d.id, segments: d.parts });
   } catch (err: any) {
@@ -171,8 +202,10 @@ async function sendSms(m: Claimed) {
     if (TELNYX_BLOCKS[code]) {
       // Telnyx refuses this recipient — record the provider fact so we stop paying to retry it.
       await db.execute(sql`insert into crm_suppressions (channel, value, reason, source)
-        values ('sms', ${m.to_address}, ${TELNYX_BLOCKS[code]}, ${`telnyx:${code}`}) on conflict do nothing`);
+        values (${m.channel}::crm_channel, ${m.to_address}, ${TELNYX_BLOCKS[code]}, ${`telnyx:${code}`}) on conflict do nothing`);
       await mark(m.id, "failed", { error: msg });
+    } else if (m.channel === "whatsapp" && code === 40008) {
+      await mark(m.id, "failed", { error: msg });     // WhatsApp 40008 = template pending/rejected/paused/disabled: retrying can't fix it
     } else if (err instanceof Telnyx.RateLimitError || err instanceof Telnyx.APIConnectionError || TELNYX_RETRY.has(code)) {
       const wait = Number(err?.headers?.["retry-after"] ?? 5);
       await requeue(m.id, sql`now() + (${wait} || ' seconds')::interval`, msg);
@@ -182,6 +215,104 @@ async function sendSms(m: Claimed) {
       await mark(m.id, "failed", { error: msg });
     }
   }
+}
+
+// ── push ────────────────────────────────────────────────────────────────────────────────────────
+type Device = { id: string; push_kind: string | null; push_token: string | null; push_keys: { p256dh: string; auth: string } | null };
+async function sendPush(msgs: Claimed[]) {
+  const ids = msgs.map((m) => m.to_address);
+  const { rows } = await db.execute<Device>(sql`select id, push_kind, push_token, push_keys from crm_devices
+    where id = any(string_to_array(${ids.join(",")}, ',')::uuid[]) and push_status = 'granted'`);
+  const dev = new Map(rows.map((d) => [d.id, d]));
+  const toExpo: { m: Claimed; msg: ExpoPushMessage }[] = [];
+  for (const m of msgs) {
+    const d = dev.get(m.to_address);
+    if (!d?.push_token) { await mark(m.id, "skipped", { error: "device has no granted push token" }); continue; }
+    const url = m.payload?.url as string | undefined;          // deep link: universal link or app scheme
+    if (d.push_kind === "expo") {
+      if (!Expo.isExpoPushToken(d.push_token)) { await revoke(d.id, "invalid token"); await mark(m.id, "failed", { error: "not an Expo push token" }); continue; }
+      toExpo.push({ m, msg: { to: d.push_token, title: m.subject ?? undefined, body: m.body, sound: "default",
+        data: { ...(m.payload?.data ?? {}), url, message_id: m.id }, badge: m.payload?.badge, channelId: m.payload?.channelId } });
+    } else if (d.push_kind === "webpush" && d.push_keys) {
+      await sendWebPush(m, d, url);
+    } else await mark(m.id, "skipped", { error: `unknown push kind ${d.push_kind}` });
+  }
+  for (const chunk of expo.chunkPushNotifications(toExpo.map((x) => x.msg))) {
+    const part = toExpo.splice(0, chunk.length);
+    let tickets: ExpoPushTicket[];
+    try { tickets = await expo.sendPushNotificationsAsync(chunk); }
+    catch (err: any) {                                            // whole request refused (429 / 5xx / network)
+      const why = [err?.message ?? String(err), err?.cause?.code].filter(Boolean).join(" · ");
+      for (const { m } of part) await requeue(m.id, sql`now() + interval '30 seconds'`, `expo: ${why}`.slice(0, 500));
+      continue;
+    }
+    for (let i = 0; i < part.length; i++) {
+      const t = tickets[i], m = part[i].m;
+      if (t?.status === "ok") { await mark(m.id, "sent", { providerMessageId: t.id }); continue; }
+      const code = (t as any)?.details?.error as string | undefined;
+      if (code === "DeviceNotRegistered") { await revoke(m.to_address, code); await mark(m.id, "failed", { error: code }); }
+      else if (code === "MessageRateExceeded") await requeue(m.id, sql`now() + interval '5 seconds'`, code);
+      else await mark(m.id, "failed", { error: `${code ?? "error"}: ${(t as any)?.message ?? ""}`.slice(0, 500) });
+    }
+  }
+}
+
+async function sendWebPush(m: Claimed, d: Device, url?: string) {
+  const { VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY, VAPID_SUBJECT } = process.env;
+  if (!VAPID_PUBLIC_KEY || !VAPID_PRIVATE_KEY) { await mark(m.id, "failed", { error: "web push not configured (VAPID_* keys)" }); return; }
+  // generateRequestDetails = the encrypted request (RFC 8291) + VAPID auth; sent with fetch so the
+  // worker sees the push service's own status codes.
+  const req = webpush.generateRequestDetails(
+    { endpoint: d.push_token!, keys: d.push_keys! },
+    JSON.stringify({ title: m.subject ?? "", body: m.body, url, data: { ...(m.payload?.data ?? {}), message_id: m.id } }),
+    { TTL: Number(m.payload?.ttl ?? 86400), urgency: m.payload?.urgency ?? "normal",
+      vapidDetails: { subject: VAPID_SUBJECT ?? "mailto:growth@localhost", publicKey: VAPID_PUBLIC_KEY, privateKey: VAPID_PRIVATE_KEY } },
+  );
+  try {
+    // fetch sets Content-Length from the body itself; web-push hands it (and TTL) over as numbers, which
+    // stricter undici builds reject (UND_ERR_INVALID_ARG), so pass string headers without it.
+    const headers = Object.fromEntries(Object.entries(req.headers)
+      .filter(([k]) => k.toLowerCase() !== "content-length").map(([k, v]) => [k, String(v)]));
+    const res = await fetch(req.endpoint, { method: req.method, headers, body: req.body as any });
+    if (res.status >= 200 && res.status < 300) await mark(m.id, "sent", { providerMessageId: res.headers.get("location") ?? undefined });
+    else if (res.status === 404 || res.status === 410) { await revoke(d.id, `webpush ${res.status}`); await mark(m.id, "failed", { error: `subscription gone (${res.status})` }); }
+    else if (res.status === 429) await requeue(m.id, sql`now() + (${Number(res.headers.get("retry-after") ?? 10)} || ' seconds')::interval`, "webpush 429");
+    else await mark(m.id, "failed", { error: `webpush ${res.status}: ${(await res.text()).slice(0, 200)}` });
+  } catch (err: any) {                                  // network-level: fetch's real reason lives in err.cause
+    const why = [err?.message ?? String(err), err?.cause?.code, err?.cause?.message].filter(Boolean).join(" · ");
+    await requeue(m.id, sql`now() + interval '30 seconds'`, `webpush: ${why}`.slice(0, 500));
+  }
+}
+
+export async function processPushReceipts(minAgeMinutes = 15) {
+  const { rows } = await db.execute<{ id: string; ticket: string; device: string }>(sql`
+    select id, provider_message_id as ticket, to_address as device from crm_messages
+    where provider = 'expo' and status = 'sent' and provider_message_id is not null
+      and sent_at <= now() - (${minAgeMinutes} || ' minutes')::interval
+    limit 1000`);
+  if (!rows.length) return 0;
+  const byTicket = new Map(rows.map((r) => [r.ticket, r]));
+  for (const ids of expo.chunkPushNotificationReceiptIds([...byTicket.keys()])) {
+    let receipts: Record<string, any>;
+    try { receipts = await expo.getPushNotificationReceiptsAsync(ids); } catch { continue; }   // next loop retries
+    for (const [ticket, r] of Object.entries(receipts)) {
+      const row = byTicket.get(ticket)!;
+      if (r.status === "ok") await db.execute(sql`update crm_messages set status = 'delivered', delivered_at = now() where id = ${row.id}`);
+      else {
+        if (r.details?.error === "DeviceNotRegistered") await revoke(row.device, "DeviceNotRegistered");
+        await mark(row.id, "failed", { error: `${r.details?.error ?? "error"}: ${r.message ?? ""}`.slice(0, 500) });
+      }
+    }
+  }
+  return rows.length;
+}
+
+// A dead token is a provider fact: record it on the device so nothing retries it.
+async function revoke(deviceId: string, why: string) {
+  await db.execute(sql`update crm_devices set push_status = 'revoked', push_token = null where id = ${deviceId}::uuid`);
+  await db.execute(sql`insert into crm_events (contact_id, name, source, properties, occurred_at)
+    select contact_id, 'push.revoked', 'app', jsonb_build_object('device_id', id, 'reason', ${why}::text), now()
+    from crm_devices where id = ${deviceId}::uuid`);
 }
 
 async function requeue(id: string, until: any, error: string) {
@@ -206,20 +337,31 @@ function groupBy<T>(xs: T[], k: (x: T) => string) {
 
 // Enrollment → outbox: render per contact, insert with ON CONFLICT DO NOTHING (idempotent re-runs).
 // Holdout (optional — only when the campaign sets holdout_pct) = enrollment row, no message.
+// push fans out to every device the contact granted (one row per device); in_app targets the contact.
 export async function enqueueStep(opts: {
-  campaignId: string; step: number; channel: "email" | "sms"; from: string;
-  subject?: (row: any) => string; body: (row: any) => string; audience: any[]; delayMinutes?: number;
+  campaignId: string; step: number; channel: Channel; from: string;
+  subject?: (row: any) => string; body: (row: any) => string; payload?: (row: any) => Record<string, unknown>;
+  audience: any[]; delayMinutes?: number;
 }) {
   for (const row of opts.audience) {
-    const key = `${opts.campaignId}/${row.contact_id}/${opts.step}`;
-    const to = opts.channel === "email" ? row.email : row.phone_e164;
-    if (!to || row.holdout) continue;
-    await db.execute(sql`
+    if (row.holdout) continue;
+    const base = `${opts.campaignId}/${row.contact_id}/${opts.step}`;
+    let targets: { key: string; to: string; provider: string }[];
+    if (opts.channel === "push") {
+      const { rows } = await db.execute<{ id: string; push_kind: string }>(sql`select id, push_kind from crm_devices
+        where contact_id = ${row.contact_id} and push_status = 'granted' and push_token is not null`);
+      targets = rows.map((d) => ({ key: `${base}/d:${d.id}`, to: d.id, provider: d.push_kind }));
+    } else {
+      const to = opts.channel === "email" ? row.email : opts.channel === "in_app" ? row.contact_id : row.phone_e164;
+      const provider = { email: "resend", sms: "telnyx", whatsapp: "telnyx", in_app: "inapp" }[opts.channel];
+      targets = to ? [{ key: base, to, provider }] : [];
+    }
+    for (const t of targets) await db.execute(sql`
       insert into crm_messages (idempotency_key, campaign_id, contact_id, channel, to_address, from_address,
-                                subject, body, provider, scheduled_for)
-      values (${key}, ${opts.campaignId}, ${row.contact_id}, ${opts.channel}, ${to}, ${opts.from},
-              ${opts.subject?.(row) ?? null}, ${opts.body(row)}, ${opts.channel === "email" ? "resend" : "telnyx"},
-              now() + (${opts.delayMinutes ?? 0} || ' minutes')::interval)
+                                subject, body, payload, provider, scheduled_for)
+      values (${t.key}, ${opts.campaignId}, ${row.contact_id}, ${opts.channel}, ${t.to}, ${opts.from},
+              ${opts.subject?.(row) ?? null}, ${opts.body(row)}, ${opts.payload ? JSON.stringify(opts.payload(row)) : null}::jsonb,
+              ${t.provider}, now() + (${opts.delayMinutes ?? 0} || ' minutes')::interval)
       on conflict (idempotency_key) do nothing`);
   }
 }

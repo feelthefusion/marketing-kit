@@ -65,7 +65,11 @@ if [ "$HAVE_HERMES" = 1 ]; then
             warn "$name NOT installed: $(printf '%s' "$out" | grep -v '^ *$' | tail -1 | cut -c1-110)"
             warn "   inspect: hermes skills inspect $ident"
         fi
-    done < "$KIT_ROOT/install/hermes-skills.tsv"
+    done < <(grep -v '^#' "$KIT_ROOT/install/hermes-skills.tsv"; upstream_rows "$KIT_ROOT" | awk -F'\t' '$2=="both"||$2=="hermes" {print $1 "\t4\t" $3}')
+    # retired: competing owners (GA4-first analytics → journey-analytics; HubSpot revops → growth-data)
+    for r in analytics revops; do
+        [ -e "$SKROOT/marketing/$r/SKILL.md" ] && hermes skills uninstall "$r" --yes >/dev/null 2>&1 && say "  · $r removed (competes with a kit owner — see install/upstream-skills.tsv)"
+    done
     hermes skills update >/dev/null 2>&1 && ok "hermes skills update (all hub skills at latest)" || warn "hermes skills update failed — run it manually"
     grep -qE "│ humanizer +│" <<<"$LISTED" && ok "humanizer (bundled)" || warn "bundled humanizer missing — hermes skills repair-official"
 fi

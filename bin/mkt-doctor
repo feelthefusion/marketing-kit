@@ -45,11 +45,12 @@ META="$(grep -E '^MKT_META=' "$HOME/.config/marketing-kit/settings.env" 2>/dev/n
 [ "${META:-off}" = on ] && { has META_APP_ID && pass "Meta Ads MCP ON + META_APP_ID" || gap "Meta Ads ON but META_APP_ID empty" "add it to $SECRETS, then: mkt-settings apply"; } \
                         || echo "  · Meta Ads off (optional — skill meta-ads → Setup, then mkt-settings meta on)"
 command -v uv >/dev/null 2>&1 && pass "uv (growth-optimizer)" || echo "  · uv missing — needed only for mkt-optimize"
+echo "  · mobile keys (MKT_IOS_APP_IDS, MKT_ANDROID_*, VAPID_*, EXPO_ACCESS_TOKEN) are APP env vars on Railway — optional, skill mobile-growth → Setup"
 "$KIT_ROOT/bin/mkt-ledger" doctor >/dev/null 2>&1 && pass "Supermemory ledger reachable" || gap "Supermemory ledger unreachable" "launchctl kickstart -k gui/\$(id -u)/com.supermemory.local  (or run supermemory-server)"
 
 echo "▶ hosts"
 if [ -d "$HOME/.claude" ]; then
-    for s in marketing-kit growth-data journey-analytics campaign-harden lifecycle-engine playbook-ledger; do
+    for s in $(sed -n 's/^KIT_SKILLS="\(.*\)"$/\1/p' "$KIT_ROOT/install/lib.sh"); do
         [ -L "$HOME/.claude/skills/$s" ] && [ -f "$HOME/.claude/skills/$s/SKILL.md" ] || { gap "Claude Code skill $s not linked" "bash $KIT_ROOT/install/install.sh"; continue; }
     done; [ -L "$HOME/.claude/skills/marketing-kit" ] && pass "Claude Code kit skills linked (live)"
     if command -v claude >/dev/null 2>&1; then
@@ -71,6 +72,12 @@ if git rev-parse --show-toplevel >/dev/null 2>&1; then
         grep -q "\"$p\": *true" "$R/.claude/settings.json" 2>/dev/null && pass "plugin $p (this repo)" || gap "plugin $p not enabled here" "mkt-init"
     done < "$KIT_ROOT/install/claude-plugins.tsv"; fi
     [ -f "$R/.agents/product-marketing.md" ] && pass "product-marketing.md" || gap "no .agents/product-marketing.md" "ask the agent: \"set up product marketing context\""
+    UP="${MKT_UPSTREAM:-${XDG_DATA_HOME:-$HOME/.local/share}/marketing-kit/upstream}"
+    if [ -d "$HOME/.claude" ]; then
+        n_up=0; for l in "$R"/.claude/skills/*; do [ -L "$l" ] && [[ "$(readlink "$l")" == "$UP"/* ]] && [ -f "$l/SKILL.md" ] && n_up=$((n_up+1)); done
+        n_want=$(grep -v '^#' "$KIT_ROOT/install/upstream-skills.tsv" | awk -F'\t' 'NF>=3 && ($2=="both"||$2=="claude")' | wc -l | tr -d ' ')
+        [ "$n_up" -ge "$n_want" ] && pass "curated skills linked here ($n_up/$n_want, live)" || gap "curated skills linked here: $n_up/$n_want" "mkt-init"
+    fi
     if grep -q '?' "$R/.agents/growth-stack.md" 2>/dev/null; then echo "  · growth-stack.md still has $(grep -c '?' "$R/.agents/growth-stack.md") '?' line(s) to fill"; fi
     SRC_DIRS="$(for d in app src pages lib components; do [ -d "$R/$d" ] && printf '%s ' "$R/$d"; done)"
     if [ -n "$SRC_DIRS" ]; then
@@ -78,6 +85,14 @@ if git rev-parse --show-toplevel >/dev/null 2>&1; then
             || gap "no first-party event collector yet" "ask the agent: \"add the journey-analytics first-party collector\" (references/first-party-tracking.ts)"
         grep -rlqE "data-website-id" $SRC_DIRS 2>/dev/null && pass "Umami tracker in app" || gap "Umami tracker not in app" "mkt-umami snippet <website-id>"
     fi
+    APPS="$(find "$R" -maxdepth 3 -name app.json -not -path '*/node_modules/*' -exec grep -l '"expo"' {} + 2>/dev/null)"
+    for a in $APPS; do
+        d="$(dirname "$a")"; rel="${d#"$R"/}"; [ "$d" = "$R" ] && rel=.
+        grep -q '"associatedDomains"' "$a" && pass "$rel: universal links configured" || gap "$rel: creator links can't open the app (no associatedDomains)" "skill mobile-growth → app-client.md §1"
+        grep -q '"expo-notifications"' "$d/package.json" 2>/dev/null && pass "$rel: expo-notifications" || echo "  · $rel: no push yet (npx expo install expo-notifications — mobile-growth step 5)"
+    done
+    [ -n "$APPS" ] && { grep -rlq "marketing-kit:mobile" $SRC_DIRS "$R/server" 2>/dev/null && pass "mobile routes in app (app-server.ts)" \
+        || gap "no mobile routes yet" "ask the agent: \"add the mobile-growth app routes\" (references/app-server.ts)"; }
     if DBSRC="$("$KIT_ROOT/bin/mkt-mcp" db-resolve "$R" 2>/dev/null)"; then pass "CRM DB resolvable ($DBSRC)"
     else gap "no CRM database for this repo" "CRM_DATABASE_URL in .agents/marketing-kit.env, or: railway link"; fi
     ls "$R"/campaigns/*.campaign.json >/dev/null 2>&1 && { "$KIT_ROOT/bin/mkt-preflight" "$R"/campaigns/*.campaign.json >/dev/null && pass "campaigns preflight GREEN" || gap "campaigns preflight RED" "mkt-preflight campaigns/*.campaign.json"; }

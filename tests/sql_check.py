@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run every numbered query in analytics.sql (app-DB part) and cohorts.sql against a seeded DB.
+"""Run every numbered query in analytics.sql (app-DB part), cohorts.sql and mobile.sql against a seeded DB.
 Usage: sql_check.py <dbname> <kit-root>. Exits 1 if any query errors; prints one line per query."""
 import re, subprocess, sys
 db, kit = sys.argv[1], sys.argv[2]
@@ -20,4 +20,5 @@ def run(path, stop=None):
         else: print("OK ", title, "→", len([l for l in r.stdout.splitlines() if l.strip()]), "rows")
 run(f"{kit}/skills/journey-analytics/references/analytics.sql", stop="-- ─── Umami DB")
 run(f"{kit}/skills/growth-data/references/cohorts.sql")
+run(f"{kit}/skills/mobile-growth/references/mobile.sql")
 sys.exit(1 if failed else 0)

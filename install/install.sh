@@ -57,6 +57,11 @@ print("  · supermemory plugin: signal-only capture ✓")
 PY
 fi
 
+# --- curated upstream skills: live checkouts (linked per repo by mkt-init) ------------
+say "▶ curated upstream skills (install/upstream-skills.tsv — one list for Claude Code + Hermes)"
+sync_upstream_checkouts "$KIT_ROOT"
+say "  · linked into each app repo's .claude/skills by mkt-init (git-excluded); pulled on session start by mkt-update"
+
 # --- plugins from vendor marketplaces ------------------------------------------------
 find_claude() {
     command -v claude 2>/dev/null && return
@@ -87,6 +92,10 @@ if [ -n "$CLAUDE_BIN" ] && [ -x "$CLAUDE_BIN" ]; then
         fi
     done < "$KIT_ROOT/install/claude-plugins.tsv"
     "$CLAUDE_BIN" plugin uninstall posthog@posthog --scope user >/dev/null 2>&1 && say "  · posthog plugin removed (retired: data is first-party now)" || true
+    # retired: the whole marketingskills pack (50 skills incl. GA4-first analytics + HubSpot revops).
+    # The curated set in install/upstream-skills.tsv replaces it — plugin skills can't be switched off
+    # one by one (Claude Code applies skillOverrides to non-plugin skills only).
+    "$CLAUDE_BIN" plugin uninstall marketing-skills@marketingskills --scope user >/dev/null 2>&1 && say "  · marketing-skills plugin (whole pack) removed — replaced by the curated set" || true
 
     # --- MCP servers (user scope, all through mkt-mcp → @latest on every launch) ----------
     say "▶ MCP servers (user scope)"

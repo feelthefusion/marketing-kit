@@ -1,0 +1,88 @@
+# Upstream skills — THE curated set, one manifest for both hosts (parity by construction).
+#   Claude Code: install.sh keeps a shallow git checkout of each repo (pulled on session start by
+#                mkt-update → live), and mkt-init links each listed skill into the app repo's
+#                .claude/skills/ (git-excluded) → only these skills exist, so nothing duplicates.
+#   Hermes:      hermes.sh installs each row through the skills hub (`hermes skills update` = live).
+# Only the named skills are installed, never a whole pack: every row owns one job in the
+# marketing brain (skills/marketing-kit/SKILL.md), and nothing here duplicates a kit skill.
+# Deliberately NOT installed (they compete with a kit owner or contradict the stack):
+#   marketingskills analytics (GA4/GTM-first → journey-analytics owns tracking)
+#   marketingskills revops    (HubSpot/Salesforce MQL pipeline → growth-data/growth-optimizer own scoring)
+#   appeeky aso-audit/aso-router/competitor-analysis/onboarding-optimization/referral-program/
+#     attribution-setup/app-analytics/creator-ugc-marketing/localization (each duplicates an owner below)
+#   rorkai asc-aso-audit (dup of aso), asc-revenuecat-catalog-sync, build/signing skills (app dev, not marketing)
+# hosts: both | claude | hermes      trust: community (Hermes scanner decides) | official (--force)
+# identifier (owner/repo/path)	hosts	trust	owns (one line — the router's ownership map)
+coreyhaines31/marketingskills/skills/product-marketing	both	community	positioning, ICP, messaging → .agents/product-marketing-context.md (the shared context file)
+coreyhaines31/marketingskills/skills/customer-research	both	community	research synthesis, personas, JTBD, voice of customer
+coreyhaines31/marketingskills/skills/marketing-plan	both	community	strategy, AARRR plan, budget & media planning
+coreyhaines31/marketingskills/skills/marketing-council	both	community	multi-perspective strategy review of a plan
+coreyhaines31/marketingskills/skills/competitor-profiling	both	community	competitor dossiers
+coreyhaines31/marketingskills/skills/competitors	both	community	comparison / alternative pages
+coreyhaines31/marketingskills/skills/pricing	both	community	pricing & packaging strategy
+coreyhaines31/marketingskills/skills/offers	both	community	offer design (value stack, guarantees, urgency)
+coreyhaines31/marketingskills/skills/launch	both	community	GTM & launches
+coreyhaines31/marketingskills/skills/copywriting	both	community	new copy for any page
+coreyhaines31/marketingskills/skills/copy-editing	both	community	editing existing copy
+coreyhaines31/marketingskills/skills/marketing-psychology	both	community	persuasion & behavioral principles
+coreyhaines31/marketingskills/skills/ad-creative	both	community	ad copy/creative variations (all platforms)
+coreyhaines31/marketingskills/skills/ads	claude	community	paid media strategy (search, social, CTV, OOH) — Hermes scanner blocks it; meta-ads covers Hermes
+coreyhaines31/marketingskills/skills/image	both	community	image/visual asset direction
+coreyhaines31/marketingskills/skills/video	both	community	video strategy & scripts (render → hyperframes plugin)
+coreyhaines31/marketingskills/skills/seo-audit	both	community	technical & on-page SEO
+coreyhaines31/marketingskills/skills/ai-seo	both	community	GEO/AEO — AI search & answer engines
+coreyhaines31/marketingskills/skills/programmatic-seo	both	community	pages at scale from data
+coreyhaines31/marketingskills/skills/schema	both	community	structured data
+coreyhaines31/marketingskills/skills/site-architecture	both	community	IA, internal linking, hreflang
+coreyhaines31/marketingskills/skills/directory-submissions	both	community	off-page: directories & listings
+coreyhaines31/marketingskills/skills/content-strategy	both	community	content & thought leadership plan
+coreyhaines31/marketingskills/skills/social	both	community	organic social & listening playbooks
+coreyhaines31/marketingskills/skills/community-marketing	both	community	community & advocates
+coreyhaines31/marketingskills/skills/public-relations	both	community	PR, newsjacking, crisis holding lines
+coreyhaines31/marketingskills/skills/events	both	community	events, webinars, sponsorship ROI
+coreyhaines31/marketingskills/skills/aso	both	community	ASO strategy (App Store + Google Play)
+coreyhaines31/marketingskills/skills/influencer-marketing	both	community	creator strategy: vetting, deal structure, briefs (build → partner-program)
+coreyhaines31/marketingskills/skills/referrals	both	community	referral/affiliate program design (build → partner-program)
+coreyhaines31/marketingskills/skills/co-marketing	both	community	co-marketing, channel & partner marketing
+coreyhaines31/marketingskills/skills/emails	both	community	email sequence strategy & copy (send → lifecycle-engine)
+coreyhaines31/marketingskills/skills/sms	both	community	SMS program strategy & copy (send → lifecycle-engine on Telnyx)
+coreyhaines31/marketingskills/skills/churn-prevention	both	community	cancel flows, save offers, win-back plays (model → growth-optimizer)
+coreyhaines31/marketingskills/skills/onboarding	both	community	activation & first-run
+coreyhaines31/marketingskills/skills/signup	both	community	signup/registration flows
+coreyhaines31/marketingskills/skills/cro	both	community	page & form CRO, landing pages
+coreyhaines31/marketingskills/skills/popups	both	community	popups & modals
+coreyhaines31/marketingskills/skills/paywalls	both	community	WEB upgrade screens & feature gates (app/StoreKit → paywall-optimization)
+coreyhaines31/marketingskills/skills/free-tools	both	community	engineering-as-marketing / PLG tools
+coreyhaines31/marketingskills/skills/lead-magnets	both	community	lead magnets / demand gen
+coreyhaines31/marketingskills/skills/ab-testing	both	community	experiment design: hypothesis, metric, sample size (run → growth-optimizer)
+coreyhaines31/marketingskills/skills/attribution	both	community	attribution models & reconciling numbers (data → journey-analytics)
+coreyhaines31/marketingskills/skills/marketing-loops	both	community	repeatable loops — triggered by events, never a cadence (kit override)
+coreyhaines31/marketingskills/skills/marketing-ideas	both	community	idea bank (guerrilla, viral, WOM)
+coreyhaines31/marketingskills/skills/prospecting	both	community	B2B prospect lists / ABM targets
+coreyhaines31/marketingskills/skills/cold-email	both	community	B2B outbound copy
+coreyhaines31/marketingskills/skills/sales-enablement	both	community	B2B decks, one-pagers, objection handling
+mvanhorn/last30days-skill/skills/last30days	both	community	live social listening (Reddit/X/YouTube/HN, last 30 days)
+arnabbagxd/Brand-building-skills/skills/brand-strategy	both	community	brand strategy → .agents/brand-context.md
+arnabbagxd/Brand-building-skills/skills/brand-architecture	both	community	brand architecture (master/sub/endorsed brands)
+arnabbagxd/Brand-building-skills/skills/brand-naming	both	community	naming products, tiers, programs
+appeeky/aso-skills/skills/apple-search-ads	both	community	Apple Ads strategy (execution → asc-apple-ads)
+appeeky/aso-skills/skills/ua-campaign	both	community	app install / UA campaign plans (Meta, TikTok, Google App)
+appeeky/aso-skills/skills/custom-product-pages	both	community	App Store custom product pages (one per creator/ad set)
+appeeky/aso-skills/skills/in-app-events	both	community	App Store in-app events
+appeeky/aso-skills/skills/app-store-featured	both	community	getting featured
+appeeky/aso-skills/skills/ab-test-store-listing	both	community	store listing experiments (web tests → ab-testing)
+appeeky/aso-skills/skills/rating-prompt-strategy	both	community	when to ask for ratings (prompt → mobile-growth)
+appeeky/aso-skills/skills/review-management	both	community	replying to store reviews
+appeeky/aso-skills/skills/web-to-app-funnel	both	community	web → app handoff funnels
+appeeky/aso-skills/skills/subscription-lifecycle	both	community	app subscription retention (grace, billing retry, win-back)
+appeeky/aso-skills/skills/paywall-optimization	both	community	APP paywalls (StoreKit / Play billing, trials)
+rorkai/app-store-connect-cli-skills/skills/asc-cli-usage	both	community	App Store Connect via Apple's API (asc CLI) — the store execution layer
+rorkai/app-store-connect-cli-skills/skills/asc-metadata-sync	both	community	push listing metadata (title, subtitle, keywords, description)
+rorkai/app-store-connect-cli-skills/skills/asc-localize-metadata	both	community	localized store listings
+rorkai/app-store-connect-cli-skills/skills/asc-whats-new-writer	both	community	release notes
+rorkai/app-store-connect-cli-skills/skills/asc-shots-pipeline	both	community	screenshot production & upload
+rorkai/app-store-connect-cli-skills/skills/asc-screenshot-resize	both	community	screenshot sizes per device
+rorkai/app-store-connect-cli-skills/skills/asc-analytics-reports	both	community	App Store analytics reports (impressions, conversion, sources)
+rorkai/app-store-connect-cli-skills/skills/asc-apple-ads	both	community	Apple Ads campaigns via the Apple Ads API
+rorkai/app-store-connect-cli-skills/skills/asc-ppp-pricing	both	community	purchasing-power-parity pricing per territory
+rorkai/app-store-connect-cli-skills/skills/asc-subscription-localization	both	community	localized subscription names & descriptions
