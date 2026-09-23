@@ -4,6 +4,9 @@
 # `official` = the vendor's own org (resend/, team-telnyx/). Hermes' scanner flags normal
 # API-client patterns in them (env API keys, HTTP sends); the same skills ship in the vendors' Claude
 # Code plugins, so they install with --force. Community skills never get --force.
+# Not listed: marketingskills `ads` — Hermes' scanner blocks it (a CRITICAL prompt-injection match in
+# references/audit-guardrails.md; no override exists). Claude Code gets it via the plugin; on Hermes
+# the kit's meta-ads skill + ad-creative cover paid social. Re-add when upstream changes that file.
 # identifier	kit component	trust
 coreyhaines31/marketingskills/skills/product-marketing	4	community
 coreyhaines31/marketingskills/skills/customer-research	4	community
@@ -26,7 +29,6 @@ coreyhaines31/marketingskills/skills/revops	4	community
 coreyhaines31/marketingskills/skills/cro	4	community
 coreyhaines31/marketingskills/skills/signup	4	community
 coreyhaines31/marketingskills/skills/influencer-marketing	4	community
-coreyhaines31/marketingskills/skills/ads	4	community
 coreyhaines31/marketingskills/skills/ad-creative	4	community
 coreyhaines31/marketingskills/skills/co-marketing	4	community
 coreyhaines31/marketingskills/skills/community-marketing	4	community
