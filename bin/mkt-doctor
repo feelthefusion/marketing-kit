@@ -16,7 +16,16 @@ has()  { [ -f "$SECRETS" ] && grep -qE "^$1=.+" "$SECRETS"; }
 echo "── Marketing Kit doctor ($(git -C "$KIT_ROOT" rev-parse --short HEAD 2>/dev/null || echo '?'))"
 echo "▶ machine"
 for t in node uvx railway psql; do command -v $t >/dev/null 2>&1 && pass "$t" || gap "$t missing" "re-run the kit installer (psql: brew install libpq)"; done
-for b in mkt-mcp mkt-ledger mkt-preflight mkt-init mkt-settings mkt-umami; do command -v $b >/dev/null 2>&1 && pass "$b on PATH" || gap "$b not on PATH" "export PATH=\"\$HOME/.local/bin:\$PATH\""; done
+for b in mkt-mcp mkt-ledger mkt-preflight mkt-init mkt-settings mkt-umami mkt-update mkt-webhooks; do command -v $b >/dev/null 2>&1 && pass "$b on PATH" || gap "$b not on PATH" "export PATH=\"\$HOME/.local/bin:\$PATH\""; done
+# living updates: the session-start hook is what keeps every component current
+grep -q "mkt-update --hook" "$HOME/.claude/settings.json" 2>/dev/null && pass "Claude Code SessionStart → mkt-update (living updates)" \
+    || gap "Claude Code SessionStart hook missing" "re-run the installer (install/install.sh)"
+if command -v hermes >/dev/null 2>&1; then
+    hermes config get hooks 2>/dev/null | grep -q "mkt-update" && pass "Hermes on_session_start → mkt-update (living updates)" \
+        || gap "Hermes on_session_start hook missing" "re-run install/hermes.sh"
+fi
+[ -f "$HOME/.config/marketing-kit/update-state.json" ] && pass "last upstream check: $(python3 -c 'import json,time,os; t=json.load(open(os.path.expanduser("~/.config/marketing-kit/update-state.json"))).get("checked_at"); print(time.strftime("%F %T", time.localtime(t)) if t else "never")')" \
+    || gap "no upstream check yet" "mkt-update"
 [ -f "$SECRETS" ] && [ "$(stat -f %Lp "$SECRETS" 2>/dev/null || stat -c %a "$SECRETS")" = 600 ] && pass "secrets.env (600)" || gap "secrets.env missing or not 600" "re-run installer; chmod 600 $SECRETS"
 has TELNYX_API_KEY && pass "TELNYX_API_KEY" || gap "TELNYX_API_KEY empty" "add it to $SECRETS, re-run installer"
 has RESEND_API_KEY && pass "RESEND_API_KEY" || echo "  · RESEND_API_KEY empty (fine on Claude Code — plugin uses OAuth; needed for Hermes)"

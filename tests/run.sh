@@ -184,5 +184,61 @@ if [ "${MKT_TEST_SQL:-1}" = 1 ] && command -v createdb >/dev/null && command -v 
     dropdb --if-exists "$DB" >/dev/null 2>&1
 else echo "  · local Postgres not available — SQL run skipped"; fi
 
+echo "▶ living updates: mkt-update (event-driven, offline via local bare repos)"
+LU="$T/lu"; mkdir -p "$LU/remotes/test" "$LU/remotes/resend" "$LU/home" "$LU/proj"
+CLEANPATH="/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin"   # no claude/hermes → updates apply nothing global
+cp -R "$KIT" "$LU/kit" && rm -rf "$LU/kit/.git"
+( cd "$LU/kit" && git init -q && git add -A && git -c user.name=t -c user.email=t@t commit -qm kit && git remote add origin https://github.com/test/kit )
+for r in test/kit resend/resend-skills; do
+    git init -q --bare "$LU/remotes/$r.git" 2>/dev/null; mv "$LU/remotes/$r.git" "$LU/remotes/$r"
+    tmpc="$LU/c-$(basename "$r")"; git clone -q "$LU/remotes/$r" "$tmpc" 2>/dev/null
+    ( cd "$tmpc" && git -c user.name=t -c user.email=t@t commit -q --allow-empty -m one && git push -q origin HEAD 2>/dev/null )
+done
+mu() { env -i HOME="$LU/home" PATH="$CLEANPATH" XDG_CONFIG_HOME="$LU/cfg" MKT_GIT_BASE="file://$LU/remotes" MKT_NO_PLUGINS=1 "$@"; }
+mu "$LU/kit/bin/mkt-update" >/dev/null 2>&1
+n="$(python3 -c "import json;print(len(json.load(open('$LU/cfg/marketing-kit/update-state.json'))['rev']))" 2>/dev/null)"
+[ "$n" = 3 ] && ok "first run records upstream revisions (kit + resend marketplace + resend hub skills)" || bad "state records ($n)"
+mu "$LU/kit/bin/mkt-update" --check | grep -q "everything current" && ok "no upstream movement → nothing to do" || bad "idle check"
+( cd "$LU/c-resend-skills" && git -c user.name=t -c user.email=t@t commit -q --allow-empty -m two && git push -q origin HEAD 2>/dev/null )
+out="$(mu "$LU/kit/bin/mkt-update" --check)"
+echo "$out" | grep -q "marketplace:resend-skills" && echo "$out" | grep -q "hermes-skills:resend/resend-skills" \
+    && ! echo "$out" | grep -q " kit " && ok "upstream push detected — only the moved components flagged" || bad "change detection: $out"
+# project sync on session start
+( cd "$LU/proj" && git init -q && mkdir -p .agents && echo "# stack" > .agents/growth-stack.md && echo stale > .agents/.marketing-kit-version )
+echo "done: x" > "$LU/cfg/marketing-kit/update-notice.txt"
+s=$(python3 -c 'import time;print(time.time())')
+hout="$(echo "{\"cwd\":\"$LU/proj\",\"hook_event_name\":\"SessionStart\"}" | mu "$LU/kit/bin/mkt-update" --hook)"
+ms=$(python3 -c "import time;print(int((time.time()-$s)*1000))")
+[ "$ms" -lt 2500 ] && ok "hook returns immediately (${ms} ms) — work happens in background" || bad "hook took ${ms} ms"
+echo "$hout" | grep -q "^Marketing Kit auto-updated since your last session: done: x" && ok "Claude Code: previous run's updates → session context" || bad "claude notice: $hout"
+for _ in $(seq 1 40); do [ "$(cat "$LU/proj/.agents/.marketing-kit-version")" != stale ] && break; sleep 1; done
+[ "$(cat "$LU/proj/.agents/.marketing-kit-version")" = "$(git -C "$LU/kit" rev-parse --short=12 HEAD)" ] \
+    && ok "stale project re-synced to the kit in the background" || bad "project sync"
+for _ in $(seq 1 10); do [ -d "$LU/cfg/marketing-kit/update.lock" ] || break; sleep 1; done
+hj="$(echo "{\"cwd\":\"$LU/proj\",\"hook_event_name\":\"on_session_start\"}" | mu "$LU/kit/bin/mkt-update" --hook)"
+python3 -c "import json,sys; d=json.loads(sys.argv[1]); assert 'kit-managed files synced' in d['context']" "$hj" 2>/dev/null \
+    && ok "Hermes: sync result delivered as {\"context\": …} next session" || bad "hermes notice: $hj"
+echo '' | mu env MKT_UPDATE=off "$LU/kit/bin/mkt-update" --hook | grep -q . && bad "MKT_UPDATE=off still ran" || ok "MKT_UPDATE=off → hook is a no-op"
+# hook wiring: idempotent, never clobbers existing hooks
+mkdir -p "$LU/cc"; echo '{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"mine.sh"}]}],"Stop":[{"hooks":[{"type":"command","command":"stop.sh"}]}]}}' > "$LU/cc/settings.json"
+( source "$KIT/install/lib.sh" >/dev/null 2>&1; MKT_BIN=/x; wire_claude_update_hook "$LU/cc"; wire_claude_update_hook "$LU/cc" ) >/dev/null
+python3 - "$LU/cc/settings.json" <<'PY' && ok "SessionStart hook wired once; existing hooks kept" || bad "hook wiring"
+import json, sys
+h = json.load(open(sys.argv[1]))["hooks"]
+cmds = [x["command"] for g in h["SessionStart"] for x in g["hooks"]]
+assert cmds.count("/x/mkt-update --hook") == 1 and "mine.sh" in cmds and h["Stop"], cmds
+PY
+# CLI-less sync (CI runner) must not churn .claude/settings.json → no empty PRs
+( cd "$LU/proj" && mu bash "$LU/kit/install/init-project.sh" >/dev/null 2>&1; mu env MKT_NO_PLUGINS=0 bash "$LU/kit/install/init-project.sh" >/dev/null 2>&1; cp .claude/settings.json "$LU/s2"; mu env MKT_NO_PLUGINS=0 bash "$LU/kit/install/init-project.sh" >/dev/null 2>&1 )
+cmp -s "$LU/s2" "$LU/proj/.claude/settings.json" && grep -q '"resend@resend-skills": true' "$LU/s2" \
+    && ok "no-CLI sync writes project plugins once, then leaves settings.json byte-identical" || bad "settings churn"
+python3 - "$KIT/.github/workflows/notify-projects.yml" "$KIT/templates/github/marketing-kit-sync.yml" <<'PY' && ok "webhook workflows: dispatch-driven, no schedule, full-SHA pins" || bad "workflow shape"
+import re, sys
+a, b = (open(p).read() for p in sys.argv[1:3])
+assert not re.search(r"^\s*(schedule|- cron):", a + b, re.M)
+assert "repository_dispatch" in b and "types: [marketing-kit-updated]" in b and "event_type=marketing-kit-updated" in a
+assert all(re.search(r"@[0-9a-f]{40}\b", l) for l in (a + b).splitlines() if "uses:" in l)
+PY
+
 echo "── $pass passed · $fail failed"
 [ "$fail" = 0 ]

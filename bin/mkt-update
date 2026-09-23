@@ -1,0 +1,192 @@
+#!/usr/bin/env bash
+# =============================================================================
+# Marketing Kit — living updates.  Event-driven: runs when YOU start a session, never on a timer.
+#
+#   mkt-update              check every component's upstream now, apply what changed, sync this repo
+#   mkt-update --check      report what changed upstream, apply nothing
+#   mkt-update --status     components, last-seen upstream revision, last check
+#   mkt-update --hook       (Claude Code SessionStart / Hermes on_session_start)
+#                           prints what the previous run updated, then checks + applies in the
+#                           BACKGROUND — the session starts instantly, nothing waits on the network
+#
+# How it detects updates: one `git ls-remote` per upstream repo (the kit, each vendor
+# marketplace, each Hermes skill source, Umami releases), all in parallel (~1s total). Only
+# components whose revision moved get updated. MCP servers need nothing: they launch
+# `pkg@latest` on every start. GitHub only sends webhooks to a repo's admins (and npm/PyPI send
+# none), so for vendor upstreams the session start IS the event. Repos you own get real
+# webhooks on top — see mkt-webhooks.
+#
+#   MKT_UPDATE_TTL=300   seconds a check result is reused (many sessions opening at once = 1 check)
+#   MKT_UPDATE=off       disable (the hook becomes a no-op)
+# =============================================================================
+set -uo pipefail
+SELF="${BASH_SOURCE[0]}"; while [ -L "$SELF" ]; do SELF="$(readlink "$SELF")"; done
+KIT_ROOT="$(cd "$(dirname "$SELF")/.." && pwd)"
+CONF="${XDG_CONFIG_HOME:-$HOME/.config}/marketing-kit"
+STATE="$CONF/update-state.json"; LOG="$CONF/update.log"; NOTICE="$CONF/update-notice.txt"; LOCK="$CONF/update.lock"
+TTL="${MKT_UPDATE_TTL:-300}"
+GIT_BASE="${MKT_GIT_BASE:-https://github.com}"   # tests point this at local bare repos
+mkdir -p "$CONF"
+
+find_claude() {
+    command -v claude 2>/dev/null && return
+    local d="$HOME/Library/Application Support/Claude/claude-code"
+    [ -d "$d" ] && ls -d "$d"/*/claude.app/Contents/MacOS/claude 2>/dev/null | sort -V | tail -1
+}
+CLAUDE_BIN="$(find_claude || true)"
+have_hermes() { command -v hermes >/dev/null 2>&1; }
+
+# ---- the component manifest (derived from the installers' own lists — one source of truth) ----
+components() {   # name <TAB> repo <TAB> kind
+    local kit_repo; kit_repo="$(git -C "$KIT_ROOT" remote get-url origin 2>/dev/null | sed -E 's#(git@github.com:|https://github.com/)##; s#\.git$##')"
+    printf 'kit\t%s\tkit\n' "${kit_repo:-feelthefusion/marketing-kit}"
+    grep -v '^#' "$KIT_ROOT/install/claude-plugins.tsv" | awk -F'\t' 'NF>=3 {split($1,a,"@"); print "marketplace:" a[2] "\t" $2 "\tmarketplace"}' | sort -u
+    grep -v '^#' "$KIT_ROOT/install/hermes-skills.tsv" | awk -F'\t' 'NF>=2 {split($1,a,"/"); print "hermes-skills:" a[1] "/" a[2] "\t" a[1] "/" a[2] "\thermes"}' | sort -u
+    printf 'umami\tumami-software/umami\trelease\n'
+}
+
+revision() {   # repo kind → upstream revision (HEAD sha, or newest release tag)
+    if [ "$2" = release ]; then
+        git ls-remote --tags --refs "$GIT_BASE/$1" 2>/dev/null | awk -F/ '{print $NF}' | grep -E '^v?[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1
+    else
+        git ls-remote "$GIT_BASE/$1" HEAD 2>/dev/null | cut -c1-12
+    fi
+}
+
+check_all() {   # → TSV name, repo, kind, old, new   (parallel)
+    local tmp; tmp="$(mktemp -d)"
+    while IFS=$'\t' read -r name repo kind; do
+        ( printf '%s\t%s\t%s\t%s\n' "$name" "$repo" "$kind" "$(revision "$repo" "$kind")" > "$tmp/$(echo "$name" | tr '/:' '__')" ) &
+    done < <(components)
+    wait
+    cat "$tmp"/* 2>/dev/null | while IFS=$'\t' read -r name repo kind new; do
+        old="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("rev",{}).get(sys.argv[2],""))' "$STATE" "$name" 2>/dev/null)"
+        printf '%s\t%s\t%s\t%s\t%s\n' "$name" "$repo" "$kind" "$old" "$new"
+    done
+    rm -rf "$tmp"
+}
+
+save_state() {   # $1: TSV from check_all → state.rev[name] = new  (not stdin: the heredoc owns it)
+    ROWS="$1" python3 - "$STATE" <<'PY'
+import json, os, sys, time
+p = sys.argv[1]
+try: s = json.load(open(p))
+except Exception: s = {}
+rev = s.setdefault("rev", {})
+for line in os.environ["ROWS"].splitlines():
+    name, repo, kind, old, new = (line.rstrip("\n").split("\t") + [""] * 5)[:5]
+    if new: rev[name] = new
+s["checked_at"] = int(time.time())
+json.dump(s, open(p, "w"), indent=2)
+PY
+}
+
+state_get() { python3 -c 'import json,sys; s=json.load(open(sys.argv[1])); v=s
+for k in sys.argv[2].split("."): v=v.get(k,{}) if isinstance(v,dict) else {}
+print(v if not isinstance(v,(dict,list)) else json.dumps(v))' "$STATE" "$1" 2>/dev/null; }
+
+# ---- apply: only the components whose revision moved --------------------------------------------
+apply_changes() {   # $1 = TSV of changed rows, $2 = project dir ("" if none)
+    local changed="$1" proj="$2" done_list=()
+    while IFS=$'\t' read -r name repo kind old new; do
+        [ -n "$name" ] || continue
+        case "$kind" in
+            kit)
+                if [ -n "$(git -C "$KIT_ROOT" status --porcelain)" ]; then echo "kit: local edits in $KIT_ROOT — not pulling"; continue; fi
+                git -C "$KIT_ROOT" pull --ff-only --quiet || { echo "kit: pull failed"; continue; }
+                # The installers are idempotent and themselves refresh marketplaces, plugins, hub skills.
+                [ -n "$CLAUDE_BIN" ] && KIT_NO_PULL=1 bash "$KIT_ROOT/install/install.sh" >>"$LOG" 2>&1
+                have_hermes && KIT_NO_PULL=1 bash "$KIT_ROOT/install/hermes.sh" >>"$LOG" 2>&1
+                done_list+=("Marketing Kit $old→$new (skills, CLIs, MCP config, plugins re-synced)") ;;
+            marketplace)
+                [ -n "$CLAUDE_BIN" ] || continue
+                local mkt="${name#marketplace:}"
+                "$CLAUDE_BIN" plugin marketplace update "$mkt" >>"$LOG" 2>&1
+                while IFS=$'\t' read -r plugin _ scope _; do
+                    [ "${plugin#*@}" = "$mkt" ] || continue
+                    if [ "$scope" = project ]; then
+                        [ -n "$proj" ] && (cd "$proj" && "$CLAUDE_BIN" plugin update "$plugin" --scope project >>"$LOG" 2>&1)
+                    else "$CLAUDE_BIN" plugin update "$plugin" >>"$LOG" 2>&1; fi
+                    done_list+=("$plugin")
+                done < <(grep -v '^#' "$KIT_ROOT/install/claude-plugins.tsv") ;;
+            hermes)
+                have_hermes || continue
+                hermes skills update >>"$LOG" 2>&1 && done_list+=("Hermes skills from $repo") ;;
+            release)   # Umami: redeploy every Umami service mkt-umami created, from the latest image
+                command -v railway >/dev/null || continue
+                for d in $(state_get umami_projects | python3 -c 'import json,sys; [print(x) for x in json.loads(sys.stdin.read() or "[]")]' 2>/dev/null); do
+                    [ -d "$d" ] && (cd "$d" && railway redeploy -s umami --from-source -y >>"$LOG" 2>&1) \
+                        && done_list+=("Umami $old→$new redeployed ($(basename "$d"))")
+                done ;;
+        esac
+    done <<< "$changed"
+    [ "${#done_list[@]}" -gt 0 ] && printf '%s\n' "${done_list[@]}"
+}
+
+# ---- project sync: re-apply the kit's managed blocks when this repo is behind the kit -------------
+project_dir() {   # the repo the session opened, if it's a Marketing Kit repo
+    local d="${1:-$PWD}"; d="$(git -C "$d" rev-parse --show-toplevel 2>/dev/null || echo "$d")"
+    [ -f "$d/.agents/growth-stack.md" ] && echo "$d"
+}
+sync_project() {
+    local d="$1" kit_rev stamp
+    kit_rev="$(git -C "$KIT_ROOT" rev-parse --short=12 HEAD)"
+    stamp="$(cat "$d/.agents/.marketing-kit-version" 2>/dev/null || true)"
+    [ "$stamp" = "$kit_rev" ] && return 0
+    (cd "$d" && MKT_QUIET=1 bash "$KIT_ROOT/install/init-project.sh" >>"$LOG" 2>&1) \
+        && echo "$(basename "$d"): kit-managed files synced to $kit_rev ($(git -C "$d" status --porcelain | wc -l | tr -d ' ') file(s) changed — review with git diff)"
+}
+
+run() {   # $1 = apply|check   $2 = project dir
+    local mode="$1" proj="$2" rows changed out=""
+    rows="$(check_all)"
+    changed="$(awk -F'\t' '$4 != "" && $5 != "" && $4 != $5' <<< "$rows")"
+    if [ "$mode" = check ]; then
+        [ -n "$changed" ] && awk -F'\t' '{printf "  ↑ %-34s %s → %s\n", $1, $4, $5}' <<< "$changed" || echo "  ✓ everything current"
+        return
+    fi
+    [ -n "$changed" ] && out="$(apply_changes "$changed" "$proj")"
+    save_state "$rows"
+    [ -n "$proj" ] && { s="$(sync_project "$proj")"; [ -n "$s" ] && out="${out:+$out$'\n'}$s"; }
+    echo "$(date '+%F %T') checked $(wc -l <<< "$rows" | tr -d ' ') components; changed: $(awk -F'\t' '{print $1}' <<< "$changed" | xargs)" >> "$LOG"
+    [ -n "$out" ] && printf '%s\n' "$out"
+}
+
+fresh() {   # checked within TTL?
+    local t; t="$(state_get checked_at)"; [ -n "$t" ] && [ $(( $(date +%s) - t )) -lt "$TTL" ]
+}
+
+case "${1:-}" in
+    --hook)
+        [ "${MKT_UPDATE:-on}" = off ] && exit 0
+        payload="$(cat 2>/dev/null || true)"
+        cwd="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1] or "{}").get("cwd",""))' "$payload" 2>/dev/null)"
+        event="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1] or "{}").get("hook_event_name",""))' "$payload" 2>/dev/null)"
+        proj="$(project_dir "${cwd:-$PWD}" || true)"
+        # 1. surface what the previous background run did (Claude: stdout → context; Hermes: {"context"})
+        if [ -s "$NOTICE" ]; then
+            msg="Marketing Kit auto-updated since your last session: $(paste -sd ';' "$NOTICE" | sed 's/;/; /g')"
+            : > "$NOTICE"
+            if [ "$event" = on_session_start ]; then python3 -c 'import json,sys; print(json.dumps({"context": sys.argv[1]}))' "$msg"; else echo "$msg"; fi
+        fi
+        # 2. check + apply in the background (lock = one run at a time; TTL = one check per burst)
+        fresh && [ -z "$proj" ] && exit 0
+        ( mkdir "$LOCK" 2>/dev/null || exit 0; trap 'rmdir "$LOCK"' EXIT
+          if fresh; then out="$( [ -n "$proj" ] && sync_project "$proj")"; else out="$(run apply "$proj")"; fi
+          [ -n "$out" ] && printf '%s\n' "$out" >> "$NOTICE" ) </dev/null >/dev/null 2>&1 &
+        disown 2>/dev/null || true
+        exit 0 ;;
+    --check)   echo "▶ upstream check (nothing applied)"; run check "" ;;
+    --status)
+        echo "Marketing Kit components  (state: $STATE)"
+        rows="$(check_all)"
+        awk -F'\t' '{ st = ($4 == "" ? "new" : ($4 == $5 ? "current" : "UPDATE")); printf "  %-8s %-36s %-40s %s\n", st, $1, $2, $5 }' <<< "$rows"
+        t="$(state_get checked_at)"; [ -n "$t" ] && echo "last check: $(date -r "$t" '+%F %T' 2>/dev/null || date -d "@$t" '+%F %T')"
+        echo "MCP servers: live on every launch (pkg@latest) — nothing to update" ;;
+    ""|--now)
+        mkdir "$LOCK" 2>/dev/null || { echo "another mkt-update is running"; exit 0; }; trap 'rmdir "$LOCK"' EXIT
+        echo "▶ checking upstreams"; out="$(run apply "$(project_dir "$PWD" || true)")"
+        [ -n "$out" ] && printf '  ✓ %s\n' "$out" | sed 's/\n/\n  ✓ /g' || echo "  ✓ everything current" ;;
+    -h|--help) sed -n '2,20p' "$SELF" | sed 's/^# \{0,1\}//' ;;
+    *) echo "usage: mkt-update [--check|--status|--hook]" >&2; exit 2 ;;
+esac

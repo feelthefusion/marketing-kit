@@ -125,6 +125,12 @@ cat > "$STANZA" <<'MD'
 MD
 write_marked_block "$CLAUDE_DIR/CLAUDE.md" marketing-kit "$STANZA"; rm -f "$STANZA"
 ok "stanza written"
+say "▶ living updates (session start = the event; no timers)"
+case "$(wire_claude_update_hook "$CLAUDE_DIR")" in
+    added) ok "SessionStart → mkt-update --hook (existing hooks kept)" ;;
+    present) ok "SessionStart → mkt-update --hook already wired" ;;
+    *) warn "could not wire SessionStart hook — add it by hand: mkt-update --hook" ;;
+esac
 write_kit_version "$KIT_ROOT" "$CLAUDE_DIR"
 
 say "─── done ───────────────────────────────────────────────"

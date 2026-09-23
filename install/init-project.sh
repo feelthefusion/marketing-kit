@@ -155,7 +155,22 @@ if [ "${MKT_NO_PLUGINS:-0}" != 1 ] && [ -n "$CLAUDE_BIN" ] && [ -x "$CLAUDE_BIN"
         && echo "  · crm-db MCP registered for this repo (local scope; mode from .agents/marketing-kit.env) ✓" \
         || echo "  ⚠ crm-db MCP add failed — claude mcp add -s local crm-db -- mkt-mcp db"
 elif [ "${MKT_NO_PLUGINS:-0}" != 1 ]; then
-    echo "  · claude CLI not found — Claude Code plugins not enabled for this repo (Hermes uses hub skills)"
+    # No CLI (CI runner / Hermes-only machine): write the same enabledPlugins keys the CLI would,
+    # merged into .claude/settings.json, so the repo is identical wherever it was synced.
+    mkdir -p .claude
+    python3 - "$KIT_ROOT/install/claude-plugins.tsv" <<'PY'
+import json, os, sys
+p = ".claude/settings.json"
+s = json.load(open(p)) if os.path.exists(p) else {}
+ep = s.setdefault("enabledPlugins", {})
+want = [f[0] for f in (l.rstrip("\n").split("\t") for l in open(sys.argv[1]) if l.strip() and not l.startswith("#"))
+        if len(f) >= 3 and f[2] == "project"]
+missing = [w for w in want if ep.get(w) is not True]
+if missing:   # only touch the file when a key is actually missing (no reformat churn → no empty PRs)
+    for w in missing: ep[w] = True
+    json.dump(s, open(p, "w"), indent=2); open(p, "a").write("\n")
+PY
+    echo "  · claude CLI not found — project plugins enabled in .claude/settings.json (installed on first Claude Code open) ✓"
 fi
 
 # --- Skill Starter Kit verify gate ----------------------------------------------------
@@ -189,4 +204,14 @@ if node "$KIT_ROOT/bin/mkt-preflight" campaigns/examples/winback-10d-inactive.ca
 else
     echo "  ⚠ mkt-preflight example RED — run: mkt-preflight campaigns/examples/*.campaign.json"
 fi
+# --- webhook receiver: kit push → repository_dispatch → this repo re-syncs + opens a PR ---------
+if git remote get-url origin 2>/dev/null | grep -q "github.com"; then
+    KIT_SLUG="$(git -C "$KIT_ROOT" remote get-url origin 2>/dev/null | sed -E 's#(git@github.com:|https://github.com/)##; s#\.git$##')"
+    mkdir -p .github/workflows
+    sed "s#__KIT_REPO__#${KIT_SLUG:-feelthefusion/marketing-kit}#" "$KIT_ROOT/templates/github/marketing-kit-sync.yml" > .github/workflows/marketing-kit-sync.yml
+    echo "  · .github/workflows/marketing-kit-sync.yml (webhook receiver; activate with: mkt-webhooks add) ✓"
+fi
+
+# --- living-repo stamp: which kit revision these managed files came from (mkt-update compares) ----
+git -C "$KIT_ROOT" rev-parse --short=12 HEAD > .agents/.marketing-kit-version 2>/dev/null || true
 echo "Next: fill the ? lines in .agents/growth-stack.md · set CRM_DATABASE_URL (or railway link) · mkt-doctor"

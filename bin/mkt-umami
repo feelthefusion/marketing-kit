@@ -56,6 +56,16 @@ deploy() {
     local pub=""; for _ in $(seq 1 60); do pub="$(kv "$DB_SVC" DATABASE_PUBLIC_URL)"; [ -n "$pub" ] && break; sleep 3; done
     [ -n "$pub" ] || die "no DATABASE_PUBLIC_URL on $DB_SVC yet — re-run: mkt-umami status"
     put_secret UMAMI_DATABASE_URL "$pub"; ok "UMAMI_DATABASE_URL → $SECRETS (MCP 'umami' reads it read-only)"
+    # living: mkt-update redeploys this service from the latest image when Umami cuts a release
+    python3 - "${XDG_CONFIG_HOME:-$HOME/.config}/marketing-kit/update-state.json" "$(pwd)" <<'PY'
+import json, os, sys
+p, d = sys.argv[1:3]
+s = json.load(open(p)) if os.path.exists(p) else {}
+l = s.setdefault("umami_projects", [])
+if d not in l: l.append(d)
+os.makedirs(os.path.dirname(p), exist_ok=True); json.dump(s, open(p, "w"), indent=2)
+PY
+    ok "registered for auto-redeploy on new Umami releases (mkt-update)"
     local dom; dom="$(kv "$APP_SVC" RAILWAY_PUBLIC_DOMAIN)"
     [ -n "$dom" ] && { put_secret UMAMI_URL "https://$dom"; ok "UMAMI_URL=https://$dom"; }
     say ""

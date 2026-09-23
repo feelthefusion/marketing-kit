@@ -60,6 +60,28 @@ outbox worker paces to them exactly.
 
 `send.exclude` overrides the skip list per campaign, and `[]` skips nothing.
 
+
+## Living updates (always latest, no timers)
+
+Every install pulls the latest kit and fetches every component live (vendor marketplaces, `hermes skills` hub, `npx`/`uvx …@latest`). After that the kit keeps itself current **on events, never on a schedule**:
+
+| Event | What happens |
+|---|---|
+| You open a Claude Code or Hermes session | `SessionStart` / `on_session_start` → `mkt-update --hook`: returns instantly; in the background one `git ls-remote` per upstream (kit, each vendor marketplace, each hub-skill source, Umami releases) finds what moved and updates **only that**, then re-syncs the repo you opened. The next session is told what changed. |
+| You push to this kit's `main` | GitHub webhook → `notify-projects.yml` → `repository_dispatch` to every registered project → its `marketing-kit-sync.yml` re-syncs with the latest kit and opens one PR (none if nothing managed changed). |
+| Umami cuts a release | redeployed from the latest image on your next session (`railway redeploy --from-source`). |
+| MCP servers | nothing to do: they launch `pkg@latest` every time. |
+
+Vendor upstreams can't send webhooks — GitHub only delivers them to a repo's admins, and npm/PyPI have none — so for those the session start **is** the event.
+
+```bash
+mkt-update --status            # every component, upstream revision, last check
+mkt-update                     # check + apply now
+mkt-webhooks token             # once: token the kit repo uses to dispatch (Contents: read & write on your projects)
+cd ~/Dropbox/APPS/helix && mkt-init && mkt-webhooks add     # register a project for kit-push PRs
+MKT_UPDATE=off                 # disable
+```
+
 ## The stack
 
 | # | Component | Source | Role |

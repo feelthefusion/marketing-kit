@@ -92,6 +92,15 @@ if [ "$HAVE_HERMES" = 1 ]; then
     MKT_MCP="$MM" bash "$KIT_ROOT/bin/mkt-settings" apply hermes
 fi
 
+say "▶ living updates (session start = the event; no timers)"
+if [ "$HAVE_HERMES" = 1 ]; then
+    case "$(wire_hermes_update_hook)" in
+        added) ok "on_session_start → mkt-update --hook (existing hooks kept)"
+               say "    Hermes asks once before running a new hook — approve it the first time you start hermes in a terminal" ;;
+        present) ok "on_session_start → mkt-update --hook already wired" ;;
+        *) warn "could not wire on_session_start hook — see hermes hooks --help" ;;
+    esac
+fi
 write_kit_version "$KIT_ROOT" "$HH"
 say "─── done ───────────────────────────────────────────────"
 say "Start a NEW Hermes session. Then:  mkt-doctor   ·   in each app repo:  mkt-init"

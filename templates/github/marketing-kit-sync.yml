@@ -1,0 +1,54 @@
+# Managed by Marketing Kit (mkt-init rewrites this file — edit the kit, not this copy).
+# Receives the kit's `repository_dispatch` webhook whenever the kit changes, re-applies the kit's
+# managed files with the LATEST kit, and opens (or refreshes) one PR. Nothing runs on a schedule.
+name: marketing-kit sync
+
+on:
+  repository_dispatch:
+    types: [marketing-kit-updated]
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: marketing-kit-sync
+  cancel-in-progress: true
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: fetch the latest Marketing Kit
+        env:
+          KIT_REPO: __KIT_REPO__
+        run: git clone --depth 1 "https://github.com/$KIT_REPO" "$HOME/.marketing-kit"
+
+      - name: re-sync kit-managed files (same script as mkt-init)
+        run: bash "$HOME/.marketing-kit/install/init-project.sh"
+
+      - name: open or refresh the sync PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # The version stamp alone isn't worth a PR — only real managed-file changes are.
+          if [ -z "$(git status --porcelain | grep -v '.agents/.marketing-kit-version')" ]; then
+            echo "already current"; exit 0
+          fi
+          v="$(cat .agents/.marketing-kit-version)"
+          b="marketing-kit/sync"
+          git config user.name "marketing-kit[bot]"
+          git config user.email "marketing-kit[bot]@users.noreply.github.com"
+          git checkout -B "$b"
+          git add -A
+          git commit -m "chore: sync Marketing Kit ($v)"
+          git push -f "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "$b"
+          body="Automatic sync from Marketing Kit \`$v\`. Only kit-managed files change (marked blocks in CLAUDE.md/AGENTS.md, verify.sh step, .claude/settings.json plugins, campaigns/examples, this workflow)."
+          if gh pr view "$b" >/dev/null 2>&1; then gh pr edit "$b" --body "$body"
+          else gh pr create --head "$b" --title "Sync Marketing Kit ($v)" --body "$body"; fi

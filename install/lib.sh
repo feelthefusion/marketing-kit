@@ -42,11 +42,11 @@ link_skill() {  # link_skill <src-dir> <dst-dir>
 link_bins() {  # $1 = kit root
     mkdir -p "$MKT_BIN"
     local b
-    for b in mkt-mcp mkt-ledger mkt-preflight mkt-doctor mkt-settings mkt-umami; do
+    for b in mkt-mcp mkt-ledger mkt-preflight mkt-doctor mkt-settings mkt-umami mkt-update mkt-webhooks; do
         chmod +x "$1/bin/$b"; ln -sfn "$1/bin/$b" "$MKT_BIN/$b"
     done
     chmod +x "$1/install/init-project.sh"; ln -sfn "$1/install/init-project.sh" "$MKT_BIN/mkt-init"
-    ok "mkt-mcp mkt-ledger mkt-preflight mkt-doctor mkt-settings mkt-umami mkt-init → $MKT_BIN"
+    ok "mkt-mcp mkt-ledger mkt-preflight mkt-doctor mkt-settings mkt-umami mkt-update mkt-webhooks mkt-init → $MKT_BIN"
     case ":$PATH:" in *":$MKT_BIN:"*) ;; *) warn "$MKT_BIN is not on PATH — add: export PATH=\"\$HOME/.local/bin:\$PATH\"" ;; esac
 }
 
@@ -150,6 +150,33 @@ write_marked_block() {  # write_marked_block <file> <marker> <content-file>
     awk -v s="<!-- $mk:start -->" -v e="<!-- $mk:end -->" '$0==s{skip=1} !skip{print} $0==e{skip=0}' "$f" > "$tmp"
     { printf '<!-- %s:start -->\n' "$mk"; cat "$body"; printf '<!-- %s:end -->\n' "$mk"; } >> "$tmp"
     mv "$tmp" "$f"
+}
+
+# Living updates: the session-start event runs `mkt-update --hook` (returns instantly, works in
+# the background). Claude Code: SessionStart in ~/.claude/settings.json, merged, existing hooks kept.
+wire_claude_update_hook() {  # $1 = claude dir
+    local f="$1/settings.json"; mkdir -p "$1"
+    python3 - "$f" "$MKT_BIN/mkt-update --hook" <<'PY'
+import json, os, sys
+p, cmd = sys.argv[1:3]
+s = json.load(open(p)) if os.path.exists(p) else {}
+ss = s.setdefault("hooks", {}).setdefault("SessionStart", [])
+if not any("mkt-update" in h.get("command", "") for g in ss for h in g.get("hooks", [])):
+    ss.append({"hooks": [{"type": "command", "command": cmd, "timeout": 10}]})
+    json.dump(s, open(p, "w"), indent=2); open(p, "a").write("\n"); print("added")
+else: print("present")
+PY
+}
+wire_hermes_update_hook() {
+    local ours='{"on_session_start":[{"command":"'"$MKT_BIN"'/mkt-update --hook","timeout":10}]}'
+    if hermes config get hooks 2>/dev/null | grep -q 'mkt-update'; then echo present; return; fi
+    local merged; merged="$(hermes config get --json hooks 2>/dev/null | python3 -c '
+import json, sys
+try: cur = json.load(sys.stdin) or {}
+except Exception: cur = {}
+for ev, lst in json.loads(sys.argv[1]).items(): cur.setdefault(ev, []).extend(lst)
+print(json.dumps(cur))' "$ours" 2>/dev/null || echo "$ours")"
+    hermes config set hooks "$merged" >/dev/null 2>&1 && echo added || echo failed
 }
 
 write_kit_version() {  # $1 = kit root  $2 = dir
