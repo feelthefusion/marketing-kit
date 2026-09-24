@@ -98,7 +98,7 @@ apply_changes() {   # $1 = TSV of changed rows, $2 = project dir ("" if none)
                 # The installers are idempotent and themselves refresh marketplaces, plugins, hub skills.
                 [ -n "$CLAUDE_BIN" ] && KIT_NO_PULL=1 bash "$KIT_ROOT/install/install.sh" >>"$LOG" 2>&1
                 have_hermes && KIT_NO_PULL=1 bash "$KIT_ROOT/install/hermes.sh" >>"$LOG" 2>&1
-                done_list+=("Marketing Kit $old→$new (skills, CLIs, MCP config, plugins re-synced)") ;;
+                done_list+=("Marketing Kit ${old}→$new (skills, CLIs, MCP config, plugins re-synced)") ;;
             marketplace)
                 [ -n "$CLAUDE_BIN" ] || continue
                 local mkt="${name#marketplace:}"
@@ -113,7 +113,7 @@ apply_changes() {   # $1 = TSV of changed rows, $2 = project dir ("" if none)
             upstream)   # curated skills: fast-forward the checkout — every linked repo sees it instantly
                 local d="${MKT_UPSTREAM:-${XDG_DATA_HOME:-$HOME/.local/share}/marketing-kit/upstream}/$(printf '%s' "$repo" | tr '/' '_')"
                 if [ -d "$d/.git" ] && git -C "$d" fetch --depth 1 --quiet origin HEAD >>"$LOG" 2>&1 && git -C "$d" reset --hard --quiet FETCH_HEAD; then
-                    done_list+=("$repo skills $old→$new")
+                    done_list+=("$repo skills ${old}→$new")
                 fi
                 have_hermes && hermes skills update >>"$LOG" 2>&1 ;;
             hermes)
@@ -123,7 +123,7 @@ apply_changes() {   # $1 = TSV of changed rows, $2 = project dir ("" if none)
                 command -v railway >/dev/null || continue
                 for d in $(state_get umami_projects | python3 -c 'import json,sys; [print(x) for x in json.loads(sys.stdin.read() or "[]")]' 2>/dev/null); do
                     [ -d "$d" ] && (cd "$d" && railway redeploy -s umami --from-source -y >>"$LOG" 2>&1) \
-                        && done_list+=("Umami $old→$new redeployed ($(basename "$d"))")
+                        && done_list+=("Umami ${old}→$new redeployed ($(basename "$d"))")
                 done ;;
         esac
     done <<< "$changed"

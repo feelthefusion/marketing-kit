@@ -26,6 +26,16 @@ PY
 export KIT MKT_NO_PLUGINS=1   # plugin enabling is exercised by the live install, not the unit run
 cp "$KIT/templates/winback-10d-inactive.sql" "$T/"
 
+# bash 3.2 in a UTF-8 locale treats high bytes as name chars: a $var glued to a non-ASCII char is an unbound variable under set -u
+utf_lint() {  # a function, not $(…): bash 3.2 misparses case patterns inside command substitution
+    local f
+    git ls-files | while read -r f; do
+        case "$f" in *.sh) ;; *) head -1 "$f" 2>/dev/null | grep -q bash || continue ;; esac
+        perl -ne 'print "$ARGV:$. " if /(?<!\\)\$[A-Za-z_][A-Za-z0-9_]*[^\x00-\x7F]/' "$f"
+    done
+}
+utf="$(cd "$(dirname "$0")/.." && utf_lint)"
+[ -z "$utf" ] && ok "no \$var glued to a non-ASCII char (bash 3.2 + UTF-8 locale crash)" || bad "\$var followed by non-ASCII — write \${var}: $utf"
 echo "▶ mkt-preflight"
 cp "$KIT/templates/campaign.example.json" "$T/good.campaign.json"
 expect "example campaign is GREEN"                  0 "GREEN"                         $PF "$T/good.campaign.json"
