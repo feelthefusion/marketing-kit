@@ -46,7 +46,7 @@ context files > a skill's generic advice.** Update the context file when a resul
 | **Mobile web + native app** | `aso`, `asc-*`, `custom-product-pages`, `in-app-events`, `app-store-featured`, `ab-test-store-listing`, `rating-prompt-strategy`, `review-management`, `paywall-optimization` (app), `subscription-lifecycle`, `web-to-app-funnel`, `ua-campaign` | **`mobile-growth`**: devices, universal/app links, install claims, push registration, inbox, review moments, PWA | `mobile.sql` |
 | Paid ads | `ads` (Claude Code), `ad-creative`, `apple-search-ads`, `ua-campaign` | **`meta-ads`** (Meta MCP + CAPI, `mkt-settings meta on`); Apple Ads via `asc-apple-ads` | `journey-analytics` (orders, not platform ROAS) |
 | Experiments | `ab-testing` (hypothesis, sample size, design) | **`growth-optimizer`**: bandits, holdouts, assignment | `growth-optimizer` |
-| Analytics + attribution | `attribution` (concepts, models) | **`journey-analytics`** (first-party collector, Umami, vitals) + `growth-data` (schema) | same |
+| Analytics + attribution | `attribution` (concepts, models) | **`journey-analytics`** (first-party collector, §D dashboard, vitals) + `growth-data` (schema) | same |
 | Sales + outbound | `prospecting`, `cold-email`, `sales-enablement` | `growth-data` (prospect rows) + `lifecycle-engine` (sequences) + `growth-optimizer` (`prospect_fit`) | `journey-analytics` |
 | Recurring growth loops | `marketing-loops` (loop design) | the owner of the loop's channel, **triggered by events** | `growth-optimizer` |
 | Quality gate | — | **`campaign-harden`** + `mkt-preflight` | — |
@@ -66,7 +66,7 @@ Other skills read these tables. They write through the owner's functions, never 
 ## Conflict rules: when two skills disagree, this decides
 
 1. **Tracking**: no GA4/GTM/Mixpanel/Segment/PostHog, whatever a skill suggests. Events go to
-   the first-party collector (`crm_events`), dashboards to Umami, search data to GSC (optional).
+   the first-party collector (`crm_events`, the only analytics store; dashboards are §D SQL or the app's admin screen), search data to GSC (optional).
    The upstream `analytics` skill is deliberately not installed.
 2. **CRM + lead scoring**: no HubSpot/Salesforce pipelines. Scores are `growth-optimizer` rows,
    pipelines are `growth-data` tables. The upstream `revops` skill is deliberately not installed.
@@ -89,7 +89,7 @@ Other skills read these tables. They write through the owner's functions, never 
 ## The loop (event-driven; each step names its owner)
 
 1. **Recall**: `playbook-ledger` (`mkt-ledger recall "<goal> <segment>"`). Never re-run a failed play without saying what differs.
-2. **Listen**: `journey-analytics` (events + orders, Umami, `mobile.sql`) + `last30days` (what people say right now; Claude Code only, so on Hermes use `web_search`/`xurl` for the same sweep). The output is a number.
+2. **Listen**: `journey-analytics` (events + orders, §D dashboard, `mobile.sql`) + `last30days` (what people say right now; Claude Code only, so on Hermes use `web_search`/`xurl` for the same sweep). The output is a number.
 3. **Segment**: `growth-data`, a read-only SELECT (`references/cohorts.sql`) returning `contact_id` + template columns.
 4. **Shape**: the Think skill for the discipline (map above). Write the hypothesis and ONE primary metric.
 5. **Write**: `copywriting` / `emails` / `sms` → `copy-editing` → `humanizer`. Mobile-length first (SMS, push, and a 390px-wide screen).

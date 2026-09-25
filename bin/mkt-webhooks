@@ -12,7 +12,7 @@
 #   mkt-webhooks status         registered projects, token present, last dispatch runs
 #   mkt-webhooks test           fire the webhook now (same path a kit push takes)
 #
-# Vendor upstreams (Resend, Telnyx, marketing skills, Umami…) can't webhook repos they don't
+# Vendor upstreams (Resend, Telnyx, marketing skills…) can't webhook repos they don't
 # own — those are caught by `mkt-update` on session start.
 # =============================================================================
 set -euo pipefail

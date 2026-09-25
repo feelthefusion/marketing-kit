@@ -10,7 +10,7 @@
 #                           BACKGROUND — the session starts instantly, nothing waits on the network
 #
 # How it detects updates: one `git ls-remote` per upstream repo (the kit, each vendor
-# marketplace, each curated-skill repo, each Hermes skill source, Umami releases), all in parallel (~1s total). Only
+# marketplace, each curated-skill repo, each Hermes skill source), all in parallel (~1s total). Only
 # components whose revision moved get updated. MCP servers need nothing: they launch
 # `pkg@latest` on every start. GitHub only sends webhooks to a repo's admins (and npm/PyPI send
 # none), so for vendor upstreams the session start IS the event. Repos you own get real
@@ -43,7 +43,6 @@ components() {   # name <TAB> repo <TAB> kind
     grep -v '^#' "$KIT_ROOT/install/claude-plugins.tsv" | awk -F'\t' 'NF>=3 {split($1,a,"@"); print "marketplace:" a[2] "\t" $2 "\tmarketplace"}' | sort -u
     grep -v '^#' "$KIT_ROOT/install/hermes-skills.tsv" | awk -F'\t' 'NF>=2 {split($1,a,"/"); print "hermes-skills:" a[1] "/" a[2] "\t" a[1] "/" a[2] "\thermes"}' | sort -u
     grep -v '^#' "$KIT_ROOT/install/upstream-skills.tsv" | awk -F'\t' 'NF>=3 {split($1,a,"/"); print "upstream:" a[1] "/" a[2] "\t" a[1] "/" a[2] "\tupstream"}' | sort -u
-    printf 'umami\tumami-software/umami\trelease\n'
 }
 
 revision() {   # repo kind → upstream revision (HEAD sha, or newest release tag)
@@ -119,12 +118,6 @@ apply_changes() {   # $1 = TSV of changed rows, $2 = project dir ("" if none)
             hermes)
                 have_hermes || continue
                 hermes skills update >>"$LOG" 2>&1 && done_list+=("Hermes skills from $repo") ;;
-            release)   # Umami: redeploy every Umami service mkt-umami created, from the latest image
-                command -v railway >/dev/null || continue
-                for d in $(state_get umami_projects | python3 -c 'import json,sys; [print(x) for x in json.loads(sys.stdin.read() or "[]")]' 2>/dev/null); do
-                    [ -d "$d" ] && (cd "$d" && railway redeploy -s umami --from-source -y >>"$LOG" 2>&1) \
-                        && done_list+=("Umami ${old}→$new redeployed ($(basename "$d"))")
-                done ;;
         esac
     done <<< "$changed"
     [ "${#done_list[@]}" -gt 0 ] && printf '%s\n' "${done_list[@]}"

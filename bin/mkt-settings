@@ -11,7 +11,6 @@
 # run `mkt-settings apply`). Secrets never go here; they live in secrets.env next to it.
 # Core tracking is always first-party (your site → your Postgres). These switches only add or
 # remove OPTIONAL sources/tools; turning one off unregisters its MCP server everywhere.
-# Umami is not a switch: it is core (deploy with `mkt-umami deploy`).
 # =============================================================================
 set -uo pipefail
 CONF="$HOME/.config/marketing-kit"
@@ -21,7 +20,7 @@ MKT_MCP="$HOME/.local/bin/mkt-mcp"
 [ -x "$MKT_MCP" ] || MKT_MCP="$(cd "$(dirname "$(readlink -f "$0" 2>/dev/null || echo "$0")")" && pwd)/mkt-mcp"
 
 # name → settings key, description, secrets it needs (any one satisfies), hermes timeout
-FEATURES="gsc meta"   # Umami is core (always on) — see mkt-umami
+FEATURES="gsc meta"
 META_MCP_URL="https://mcp.facebook.com/ads"
 META_REDIRECT_PORT="${MKT_META_REDIRECT_PORT:-27890}"   # Hermes OAuth callback: http://localhost:27890/callback
 key_of()   { case "$1" in gsc) echo MKT_GSC ;; meta) echo MKT_META ;; esac; }
@@ -107,7 +106,7 @@ apply_one() {  # apply_one <feature> <host|all>
 show() {
     ensure_file
     say "Marketing Kit settings  ($SETTINGS)"
-    say "  core   first-party tracking → your Postgres + Umami dashboard   always on"
+    say "  core   first-party tracking → your Postgres (crm_events)   always on"
     local f
     for f in $FEATURES; do
         local st; st="$(get "$(key_of "$f")")"

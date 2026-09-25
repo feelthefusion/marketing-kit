@@ -2,7 +2,7 @@
 -- Marketing Kit — first-party analytics SQL (Postgres). Replaces GA4/PostHog reports.
 -- Tables: crm_events (collector, source='web'; server facts, source='app'), crm_contacts,
 -- crm_revenue (table or VIEW over the app's orders/payments), crm_messages, crm_enrollments.
--- Umami variants at the bottom run on the Umami DB (mcp 'umami'), not the app DB.
+-- crm_events is the only analytics store: §D below is the full traffic dashboard.
 -- Every report takes a window; change the interval, never the definition.
 -- =============================================================================
 
@@ -74,15 +74,75 @@ where c.plan <> 'free' and e.source in ('web','app') and e.name not like 'page.%
   and e.occurred_at >= now() - interval '30 days'
 group by 1 order by users desc limit 25;
 
--- ─── Umami DB (mcp 'umami') ─────────────────────────────────────────────────
--- U1. Visitors/pageviews by utm_campaign (Umami stores utm_* per event)
-select utm_campaign, count(distinct session_id) visitors, count(*) pageviews
-from website_event where event_type = 1 and utm_campaign is not null
-  and created_at >= now() - interval '30 days' group by 1 order by visitors desc;
+-- ─── D. Dashboard: the standard traffic reports, from crm_events alone ─────────
+-- A visit = one session_id (30 min idle ends it). A bounce = a visit with exactly one page view and
+-- no other interaction (web.* vitals don't count). Duration = last event − first event of the visit.
+-- A visitor = the contact when known, else the browser (anon_id). Sources, devices and places are
+-- read from each visit's first event. The collector writes device/browser/place/referrer_host on
+-- the server; server facts (order.*, signup.*) only ever come from source 'app'.
 
--- U2. Identified sessions → CRM contact ids (session.distinct_id = crm_contacts.id via identify()).
--- Export these ids and join in the app DB; the two databases are separate by design.
-select s.distinct_id contact_id, min(e.created_at) first_seen, count(*) events
-from session s join website_event e using (session_id)
-where s.distinct_id is not null and e.created_at >= now() - interval '30 days'
-group by 1 order by events desc limit 500;
+-- D1. Headline: visitors · visits · views · bounce rate · average visit (last 7 days)
+with v as (
+  select session_id, coalesce(max(contact_id::text), min(anon_id)) visitor,
+         count(*) filter (where name = 'page.viewed') views,
+         count(*) filter (where name <> 'page.viewed' and name not like 'web.%') interactions,
+         extract(epoch from max(occurred_at) - min(occurred_at)) duration_s
+  from crm_events
+  where source in ('web', 'mobile_app') and session_id is not null and occurred_at >= now() - interval '7 days'
+  group by session_id)
+select count(distinct visitor) visitors, count(*) visits, coalesce(sum(views), 0) views,
+       round(100.0 * count(*) filter (where views = 1 and interactions = 0) / nullif(count(*), 0), 1) bounce_pct,
+       round(avg(duration_s)) avg_duration_s
+from v;
+
+-- D2. Pages: views · visitors · entries (first page of a visit) — last 7 days
+with pv as (
+  select session_id, coalesce(contact_id::text, anon_id) visitor, properties->>'path' path,
+         row_number() over (partition by session_id order by occurred_at, id) n
+  from crm_events where name = 'page.viewed' and occurred_at >= now() - interval '7 days')
+select path, count(*) views, count(distinct visitor) visitors, count(*) filter (where n = 1) entries
+from pv group by path order by views desc limit 50;
+
+-- D3. Sources: where each visit came from (UTM source, else the referring site, else direct)
+with v as (
+  select distinct on (session_id) coalesce(contact_id::text, anon_id) visitor,
+         coalesce(properties->>'utm_source', properties->>'referrer_host', 'direct') source,
+         properties->>'utm_medium' medium, properties->>'utm_campaign' campaign
+  from crm_events
+  where source in ('web', 'mobile_app') and session_id is not null and occurred_at >= now() - interval '7 days'
+  order by session_id, occurred_at, id)
+select source, medium, campaign, count(*) visits, count(distinct visitor) visitors
+from v group by 1, 2, 3 order by visits desc limit 50;
+
+-- D4. Devices: device · os · browser · in-app browser, by visits (mobile first)
+with v as (
+  select distinct on (session_id) properties p
+  from crm_events
+  where source in ('web', 'mobile_app') and session_id is not null and occurred_at >= now() - interval '7 days'
+  order by session_id, occurred_at, id)
+select p->>'device' device, p->>'os' os, p->>'browser' browser, coalesce(p->>'inapp', '-') inapp, count(*) visits
+from v group by 1, 2, 3, 4 order by visits desc;
+
+-- D5. Places + languages, by visits (country from the edge; '?' when no edge header)
+with v as (
+  select distinct on (session_id) properties p
+  from crm_events
+  where source in ('web', 'mobile_app') and session_id is not null and occurred_at >= now() - interval '7 days'
+  order by session_id, occurred_at, id)
+select coalesce(p->>'country', '?') country, p->>'region' region, p->>'city' city, p->>'language' language, count(*) visits
+from v group by 1, 2, 3, 4 order by visits desc limit 50;
+
+-- D6. Right now: visitors active in the last 30 minutes, by page
+select properties->>'path' path, count(distinct coalesce(contact_id::text, anon_id)) visitors
+from crm_events
+where name = 'page.viewed' and occurred_at >= now() - interval '30 minutes'
+group by 1 order by visitors desc limit 20;
+
+-- D7. Daily trend (chart): views · visitors · visits per day — set the store's time zone
+select (occurred_at at time zone 'UTC')::date as day,
+       count(*) filter (where name = 'page.viewed') views,
+       count(distinct coalesce(contact_id::text, anon_id)) visitors,
+       count(distinct session_id) visits
+from crm_events
+where source in ('web', 'mobile_app') and occurred_at >= now() - interval '30 days'
+group by 1 order by 1;

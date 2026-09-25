@@ -108,7 +108,7 @@ out="$(env -u TELNYX_API_KEY MKT_SECRETS=/dev/null "$KIT/bin/mkt-mcp" telnyx 2>&
 echo "▶ mkt-settings (isolated HOME — never touches real Claude/Hermes config)"
 H="$T/home"; mkdir -p "$H"
 S() { env HOME="$H" PATH="/usr/bin:/bin:$(dirname "$(command -v node)")" MKT_SETTINGS= MKT_SECRETS= "$@"; }
-expect "default: gsc off, umami core"                0 "gsc +off"                      S bash "$KIT/bin/mkt-settings"
+expect "default: gsc off"                            0 "gsc +off"                      S bash "$KIT/bin/mkt-settings"
 expect "mkt-mcp gsc refuses while off"               1 "Search Console is OFF"         S bash "$KIT/bin/mkt-mcp" gsc
 expect "gsc on → switch written"                     0 "gsc → on"                      S bash "$KIT/bin/mkt-settings" gsc on
 grep -qx "MKT_GSC=on" "$H/.config/marketing-kit/settings.env" && ok "settings.env has MKT_GSC=on" || bad "settings.env not updated"
@@ -116,13 +116,13 @@ expect "gsc on without creds → needs GOOGLE_… (not started)" 1 "GOOGLE_APPLI
 expect "bad value refused"                           1 "usage: mkt-settings gsc on"    S bash "$KIT/bin/mkt-settings" gsc maybe
 expect "gsc off → back off"                          0 "gsc → off"                     S bash "$KIT/bin/mkt-settings" gsc off
 [ "$(grep -c '^MKT_GSC=' "$H/.config/marketing-kit/settings.env")" = 1 ] && ok "toggling never duplicates the key" || bad "duplicate MKT_GSC lines"
-expect "umami is not a switch"                       1 "unknown 'umami'"               S bash "$KIT/bin/mkt-settings" umami on
+expect "umami is not a feature (retired)"            1 "unknown 'umami'"               S bash "$KIT/bin/mkt-settings" umami on
 
-echo "▶ mkt-umami"
-expect "mkt-mcp umami without URL → clear error"     1 "mkt-umami deploy"              S bash "$KIT/bin/mkt-mcp" umami
-expect "snippet carries the website id + identify"   0 "data-website-id=\"w-123\""     S bash "$KIT/bin/mkt-umami" snippet w-123
-expect "snippet links Umami to the CRM contact"      0 "identify\(contact.id"          S bash "$KIT/bin/mkt-umami" snippet w-123
-expect "deploy outside a railway-linked repo refuses" 1 "railway CLI missing|not linked" bash -c "cd '$T' && HOME='$H' bash '$KIT/bin/mkt-umami' deploy --dry-run"
+echo "▶ Umami retired (crm_events is the only analytics store)"
+expect "mkt-mcp umami → unknown server"              1 "unknown server 'umami'"        S bash "$KIT/bin/mkt-mcp" umami
+left="$(cd "$KIT" && grep -rli umami --exclude-dir=.git --exclude-dir=node_modules --exclude-dir=.cache . | grep -vxE './(tests/run.sh|install/install.sh|install/hermes.sh|install/lib.sh|bin/mkt-doctor)' | tr '\n' ' ')"
+[ -z "$left" ] && ok "no Umami left outside the retirement cleanup (installers unregister it, lib drops the link, doctor flags old keys)" || bad "Umami still referenced in: $left"
+[ ! -e "$KIT/bin/mkt-umami" ] && ok "mkt-umami CLI removed" || bad "bin/mkt-umami still shipped"
 
 echo "▶ mkt-init (in a scratch repo with a Starter-Kit style verify.sh)"
 cat > "$R/package.json" <<'J'
@@ -183,7 +183,7 @@ if [ "${MKT_TEST_SQL:-1}" = 1 ] && command -v createdb >/dev/null && command -v 
         cp "$KIT/skills/lifecycle-engine/references/outbox-worker.ts" "$W/ref/"
         printf 'import { drizzle } from "drizzle-orm/node-postgres";\nexport const db = drizzle(process.env.DATABASE_URL!);\n' > "$W/db.ts"
         cp "$KIT/tests/fixtures/worker-e2e.ts" "$W/"
-        if (cd "$D" && npm i -s resend@latest telnyx@latest expo-server-sdk@latest web-push@latest @types/web-push qrcode@latest @types/qrcode jsqr pngjs @types/pngjs pg @types/pg @types/node typescript@latest tsx >/dev/null 2>&1) \
+        if (cd "$D" && npm i -s zod@latest resend@latest telnyx@latest expo-server-sdk@latest web-push@latest @types/web-push qrcode@latest @types/qrcode jsqr pngjs @types/pngjs pg @types/pg @types/node typescript@latest tsx >/dev/null 2>&1) \
            && createdb "$WDB" && sed 's/--> statement-breakpoint//' "$D"/out/*.sql | psql -X -q "$WDB" >/dev/null 2>&1 \
            && psql -X -q -v ON_ERROR_STOP=1 -f "$KIT/tests/fixtures/worker-seed.sql" "$WDB" >/dev/null; then
             ln -s "$D/node_modules" "$W/node_modules"
@@ -209,6 +209,22 @@ if [ "${MKT_TEST_SQL:-1}" = 1 ] && command -v createdb >/dev/null && command -v 
               || { bad "mobile channels ($n_ok ok, $n_bad fail)"; grep -vE '^OK' "$T/we2e.log" | head -12; }
         else bad "worker harness setup"; fi
         dropdb --if-exists "$WDB" >/dev/null 2>&1
+
+        echo "▶ first-party collector (real Postgres, the kit's schema — crm_events is the only analytics store)"
+        C="$T/collector"; CDB="${DB}_c"; mkdir -p "$C/ref"
+        cp "$KIT/skills/journey-analytics/references/first-party-tracking.ts" "$C/ref/"
+        cp "$KIT/tests/fixtures/collector-e2e.mts" "$C/"
+        ln -sfn "$D/node_modules" "$C/node_modules"
+        if (cd "$C" && "$D/node_modules/.bin/tsc" --noEmit --strict --skipLibCheck --target es2022 --module nodenext --moduleResolution nodenext --lib es2022,dom --types node ref/first-party-tracking.ts >"$T/ctsc.log" 2>&1); then
+            ok "first-party-tracking.ts typechecks (strict, zod + drizzle @latest, DOM + server halves)"
+        else bad "first-party-tracking.ts typecheck"; head -8 "$T/ctsc.log"; fi
+        dropdb --if-exists "$CDB" >/dev/null 2>&1; createdb "$CDB"
+        if sed 's/--> statement-breakpoint//' "$D"/out/*.sql | psql -X -q -v ON_ERROR_STOP=1 "$CDB" >/dev/null 2>&1; then
+            if (cd "$C" && DATABASE_URL="postgres:///$CDB" ANALYTICS_SQL="$KIT/skills/journey-analytics/references/analytics.sql" "$D/node_modules/.bin/tsx" collector-e2e.mts >"$T/collector.log" 2>&1); then
+                ok "collector E2E: $(grep -c '^OK' "$T/collector.log") checks (retry dedupe · server-derived device/place · forged order.paid refused · §D bounce/duration)"
+            else bad "collector E2E"; grep -E '^FAIL|Error' "$T/collector.log" | head -8; fi
+        else bad "collector DB schema"; fi
+        dropdb --if-exists "$CDB" >/dev/null 2>&1
 
         echo "▶ partner-program + loyalty-engine (real Postgres + mock PayPal)"
         P="$T/prog"; PDB="${DB}_p"; mkdir -p "$P/ref" "$P/sql"

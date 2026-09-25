@@ -37,8 +37,7 @@ the rows affected with a `select count(*)` first, run inside a transaction, past
 
 - **One person, many IDs** — `crm_identities(kind, value)` links the pre-login browser
   `anon_id` (plus Resend/Telnyx/legacy ids) to one `contact_id`. `stitchAnon()` writes it at
-  signup/login (journey-analytics → `references/first-party-tracking.ts`); Umami needs no row
-  because the site calls `umami.identify(contact.id)`.
+  signup/login (journey-analytics → `references/first-party-tracking.ts`).
 - **Events are the journey** — `crm_events` is append-only with `source` and a provider
   `dedupe_key` (webhook replays are harmless). Names are `object.action` snake_case and listed
   in `growth-stack.md`; a new name gets added there in the same change.
@@ -79,7 +78,7 @@ the rows affected with a `select count(*)` first, run inside a transaction, past
 
 ## Works with →
 - **journey-analytics** — the first-party collector that fills `crm_events`, analytics SQL,
-  Umami, optional Search Console; owns lift math.
+  the §D traffic dashboard, optional Search Console; owns lift math.
 - **lifecycle-engine** — writes enrollments/messages; reads suppressions at send time.
 - **campaign-harden** — `mkt-preflight --db` runs the audience SQL here.
 - **playbook-ledger** — save the table mapping and winning cohort definitions.

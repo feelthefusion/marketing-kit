@@ -16,7 +16,7 @@ has()  { [ -f "$SECRETS" ] && grep -qE "^$1=.+" "$SECRETS"; }
 echo "── Marketing Kit doctor ($(git -C "$KIT_ROOT" rev-parse --short HEAD 2>/dev/null || echo '?'))"
 echo "▶ machine"
 for t in node uvx railway psql; do command -v $t >/dev/null 2>&1 && pass "$t" || gap "$t missing" "re-run the kit installer (psql: brew install libpq)"; done
-for b in mkt-mcp mkt-ledger mkt-preflight mkt-init mkt-settings mkt-umami mkt-update mkt-webhooks mkt-optimize; do command -v $b >/dev/null 2>&1 && pass "$b on PATH" || gap "$b not on PATH" "export PATH=\"\$HOME/.local/bin:\$PATH\""; done
+for b in mkt-mcp mkt-ledger mkt-preflight mkt-init mkt-settings mkt-update mkt-webhooks mkt-optimize; do command -v $b >/dev/null 2>&1 && pass "$b on PATH" || gap "$b not on PATH" "export PATH=\"\$HOME/.local/bin:\$PATH\""; done
 # living updates: the session-start hook is what keeps every component current
 grep -q "mkt-update --hook" "$HOME/.claude/settings.json" 2>/dev/null && pass "Claude Code SessionStart → mkt-update (living updates)" \
     || gap "Claude Code SessionStart hook missing" "re-run the installer (install/install.sh)"
@@ -29,10 +29,7 @@ fi
 [ -f "$SECRETS" ] && [ "$(stat -f %Lp "$SECRETS" 2>/dev/null || stat -c %a "$SECRETS")" = 600 ] && pass "secrets.env (600)" || gap "secrets.env missing or not 600" "re-run installer; chmod 600 $SECRETS"
 has TELNYX_API_KEY && pass "TELNYX_API_KEY" || gap "TELNYX_API_KEY empty" "add it to $SECRETS, re-run installer"
 has RESEND_API_KEY && pass "RESEND_API_KEY" || echo "  · RESEND_API_KEY empty (fine on Claude Code — plugin uses OAuth; needed for Hermes)"
-# Umami = core web analytics (self-hosted on your Railway)
-has UMAMI_DATABASE_URL && pass "Umami DB url set (umami MCP)" || gap "Umami not deployed" "in an app repo: mkt-umami deploy"
-has UMAMI_URL && { curl -fsS --max-time 6 "$(grep -E '^UMAMI_URL=' "$SECRETS" | cut -d= -f2-)/api/heartbeat" >/dev/null 2>&1 \
-    && pass "Umami dashboard up" || gap "Umami dashboard not answering" "mkt-umami status · railway logs -s umami"; }
+grep -qE '^UMAMI_[A-Z_]+=.' "$SECRETS" 2>/dev/null && echo "  · UMAMI_* keys in secrets.env are unused (Umami left the stack) — safe to delete"
 # Optional switches
 GSC="$(grep -E '^MKT_GSC=' "$HOME/.config/marketing-kit/settings.env" 2>/dev/null | cut -d= -f2)"
 if [ "${GSC:-off}" = on ]; then
@@ -83,7 +80,6 @@ if git rev-parse --show-toplevel >/dev/null 2>&1; then
     if [ -n "$SRC_DIRS" ]; then
         grep -rlq "marketing-kit:collector" $SRC_DIRS 2>/dev/null && pass "first-party collector in app (crm_events)" \
             || gap "no first-party event collector yet" "ask the agent: \"add the journey-analytics first-party collector\" (references/first-party-tracking.ts)"
-        grep -rlqE "data-website-id" $SRC_DIRS 2>/dev/null && pass "Umami tracker in app" || gap "Umami tracker not in app" "mkt-umami snippet <website-id>"
     fi
     APPS="$(find "$R" -maxdepth 3 -name app.json -not -path '*/node_modules/*' -exec grep -l '"expo"' {} + 2>/dev/null)"
     for a in $APPS; do
@@ -101,7 +97,7 @@ else echo "  · not in a git repo — repo checks skipped"; fi
 if [ "${1:-}" = --live ]; then
     echo "▶ live MCP launch (5s each; initialize handshake)"
     INIT='{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"mkt-doctor","version":"1"}}}'
-    LIVE="db telnyx resend railway umami"; [ "${GSC:-off}" = on ] && LIVE="$LIVE gsc"
+    LIVE="db telnyx resend railway"; [ "${GSC:-off}" = on ] && LIVE="$LIVE gsc"
     for s in $LIVE; do
         out="$( (printf '%s\n' "$INIT"; sleep 12) | "$KIT_ROOT/bin/mkt-mcp" $s 2>/tmp/mkt-live.$$ | head -c 400 & p=$!; ( sleep 25; kill $p 2>/dev/null ) & wait $p 2>/dev/null)"
         if grep -q '"result"' <<<"$out"; then pass "mkt-mcp $s initialize OK"

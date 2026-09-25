@@ -18,7 +18,7 @@ def run(path, stop=None):
                            input=body, capture_output=True, text=True)
         if r.returncode: failed += 1; print("ERR", title, "→", r.stderr.strip()[:160])
         else: print("OK ", title, "→", len([l for l in r.stdout.splitlines() if l.strip()]), "rows")
-run(f"{kit}/skills/journey-analytics/references/analytics.sql", stop="-- ─── Umami DB")
+run(f"{kit}/skills/journey-analytics/references/analytics.sql")
 run(f"{kit}/skills/growth-data/references/cohorts.sql")
 run(f"{kit}/skills/mobile-growth/references/mobile.sql")
 sys.exit(1 if failed else 0)

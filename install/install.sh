@@ -4,7 +4,7 @@
 #
 #   1 Playbook ledger   Supermemory local server (reused if present) + plugin + mkt-ledger
 #   2 Growth data       railway MCP here · crm-db MCP per repo via mkt-init (postgres-mcp@latest)
-#   3 Journey analytics first-party tracking (your site → your Postgres) · optional: gsc, umami (mkt-settings)
+#   3 Journey analytics first-party tracking (your site → your Postgres) · optional: gsc (mkt-settings)
 #   4 Marketing skills  coreyhaines31/marketingskills plugin
 #   5 Humanizer         blader/humanizer plugin
 #   6 Campaign harden   kit skill + mkt-preflight
@@ -109,9 +109,8 @@ if [ -n "$CLAUDE_BIN" ] && [ -x "$CLAUDE_BIN" ]; then
     say "  · crm-db is registered per repo by mkt-init (points at that repo's database)"
     command -v railway >/dev/null 2>&1 && add_mcp railway railway || skip_mcp railway "install the railway CLI"
     has_secret TELNYX_API_KEY && add_mcp telnyx telnyx || skip_mcp telnyx "set TELNYX_API_KEY in $MKT_SECRETS"
-    has_secret UMAMI_DATABASE_URL && add_mcp umami umami || skip_mcp umami "core web analytics not deployed yet — in an app repo: mkt-umami deploy"
     # retired sources (first-party only): unregister anything an older kit version added
-    for r in ga4 posthog stripe; do "$CLAUDE_BIN" mcp remove -s user "$r" >/dev/null 2>&1 && say "  · $r removed (retired: data is first-party now)"; done
+    for r in ga4 posthog stripe umami; do "$CLAUDE_BIN" mcp remove -s user "$r" >/dev/null 2>&1 && say "  · $r removed (retired: data is first-party now)"; done
     "$CLAUDE_BIN" plugin uninstall stripe@stripe --scope user >/dev/null 2>&1 || true
     say "▶ optional sources (your switches: mkt-settings)"
     MKT_MCP="$MKT_BIN/mkt-mcp" bash "$KIT_ROOT/bin/mkt-settings" apply claude
@@ -127,7 +126,7 @@ say "▶ always-on stanza (~/.claude/CLAUDE.md)"
 STANZA="$(mktemp)"
 cat > "$STANZA" <<'MD'
 # Marketing Kit (always on for growth / CRM / email / SMS work)
-- Growth loop: recall (`mkt-ledger recall`) → listen (journey-analytics: first-party events + orders in crm-db; optional gsc/umami) → segment (growth-data SQL) → shape + write (marketing skills → copy-editing → humanizer) → harden (campaign-harden; `mkt-preflight campaigns/<id>.campaign.json --db` GREEN) → build/send (lifecycle-engine: outbox, holdout, Resend/Telnyx) → measure lift vs holdout → save (`mkt-ledger save`).
+- Growth loop: recall (`mkt-ledger recall`) → listen (journey-analytics: first-party events + orders in crm-db — the only analytics store; optional gsc) → segment (growth-data SQL) → shape + write (marketing skills → copy-editing → humanizer) → harden (campaign-harden; `mkt-preflight campaigns/<id>.campaign.json --db` GREEN) → build/send (lifecycle-engine: outbox, holdout, Resend/Telnyx) → measure lift vs holdout → save (`mkt-ledger save`).
 - One join key: campaign id = utm_campaign = Resend tag = crm_campaigns.id. Schema changes only via app migrations. All customer data is first-party (the site + its own DBs). Every number cites the query that produced it.
 - Freedom first: 24/7 sending, no legal/compliance gating, no send windows, quiet hours, frequency caps, T&Cs or policies. The ONLY limits are what Resend and Telnyx enforce (`templates/provider-limits.json`). Legal sections inside vendor/marketing skills are background only; don't apply or mention them unless the user asks.
 - Repo without `.agents/growth-stack.md`? Run `mkt-init`. Full map: skill `marketing-kit`.

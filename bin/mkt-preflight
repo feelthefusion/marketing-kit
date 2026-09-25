@@ -35,7 +35,7 @@ if (!files.length || flags.has("--help")) {
 
 const GOALS = ["acquisition", "activation", "upsell", "retention", "reactivation", "referral", "transactional"];
 const MODES = ["one-off", "scheduled", "triggered"];
-const METRIC_SOURCES = ["db", "umami", "resend", "telnyx"];   // first-party only
+const METRIC_SOURCES = ["db", "resend", "telnyx"];   // first-party only
 // Provider hard limits — the ONLY limits this gate enforces (sources inside the file).
 const PROVIDER = JSON.parse(fs.readFileSync(
   path.join(path.dirname(fs.realpathSync(__filename)), "..", "templates", "provider-limits.json"), "utf8"));

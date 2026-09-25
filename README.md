@@ -5,7 +5,7 @@ CRM**: Postgres on Railway (Drizzle), email through **Resend**, SMS + WhatsApp t
 push through **Expo Push / Web Push**, mobile web and Expo apps treated as first-class. There's no
 third-party CRM, analytics or automation SaaS. **Every customer number comes from the site
 itself and its own databases**: events the site writes to its own Postgres, its own
-orders/payments, and a self-hosted Umami dashboard. The agent writes copy against that data and
+orders/payments. `crm_events` is the only analytics store, and its dashboard is SQL over it. The agent writes copy against that data and
 ships campaigns through your own code.
 
 Sibling of [skill-starter-kit](https://github.com/feelthefusion/skill-starter-kit). Starter Kit is
@@ -97,9 +97,8 @@ Every install pulls the latest kit and fetches every component live (vendor mark
 
 | Event | What happens |
 |---|---|
-| You open a Claude Code or Hermes session | `SessionStart` / `on_session_start` → `mkt-update --hook`: returns instantly; in the background one `git ls-remote` per upstream (kit, each vendor marketplace, each hub-skill source, Umami releases) finds what moved and updates **only that**, then re-syncs the repo you opened. The next session is told what changed. |
+| You open a Claude Code or Hermes session | `SessionStart` / `on_session_start` → `mkt-update --hook`: returns instantly; in the background one `git ls-remote` per upstream (kit, each vendor marketplace, each hub-skill source) finds what moved and updates **only that**, then re-syncs the repo you opened. The next session is told what changed. |
 | You push to this kit's `main` | GitHub webhook → `notify-projects.yml` → `repository_dispatch` to every registered project → its `marketing-kit-sync.yml` re-syncs with the latest kit and opens one PR (none if nothing managed changed). |
-| Umami cuts a release | redeployed from the latest image on your next session (`railway redeploy --from-source`). |
 | MCP servers | nothing to do: they launch `pkg@latest` every time. |
 
 Vendor upstreams can't send webhooks — GitHub only delivers them to a repo's admins, and npm/PyPI have none — so for those the session start **is** the event.
@@ -118,7 +117,7 @@ MKT_UPDATE=off                 # disable
 |---|-----------|--------|------|
 | 1 | **playbook-ledger** + Supermemory | local server `:6767` · `mkt-ledger` | ICPs, voice, offers, campaign lift, seasonal plays. Recalled first, saved last. Shared by both hosts |
 | 2 | **growth-data** + `crm-db` + `railway` MCP | [crystaldba/postgres-mcp](https://github.com/crystaldba/postgres-mcp) · Railway CLI `railway mcp` | CRM schema (Drizzle reference), identity stitching, cohort SQL. Resolves **the current repo's** DB. Read-only by default |
-| 3 | **journey-analytics** + first-party collector + `umami` MCP · optional `gsc` | this kit (collector: `/api/t` → `crm_events`) · [umami-software/umami](https://github.com/umami-software/umami) self-hosted on your Railway (`ghcr.io/…/umami:latest`) · [AminForou/mcp-gsc](https://github.com/AminForou/mcp-gsc) behind a switch | traffic → behavior → revenue from your own data, one join key, holdout-based lift |
+| 3 | **journey-analytics** + first-party collector + §D dashboard · optional `gsc` | this kit (collector: `/api/t` → `crm_events`, the only analytics store) · [AminForou/mcp-gsc](https://github.com/AminForou/mcp-gsc) behind a switch | traffic → behavior → revenue from your own data, one join key, holdout-based lift |
 | 4 | Curated strategy skills (73) | `install/upstream-skills.tsv`: marketingskills, appeeky ASO, rorkai App Store Connect, brand, last30days | strategy + drafts for every discipline (see *One marketing brain*) |
 | 5 | Humanizer | [blader/humanizer](https://github.com/blader/humanizer) (Hermes: bundled port) | strips AI tells from customer-facing copy |
 | 6 | **campaign-harden** + `mkt-preflight` | this kit | persona grill with evidence, claim check, and a deterministic gate for schema, variables, UTMs and SMS segments |
@@ -146,14 +145,14 @@ like, or `optimize.py --listen` on Railway (a Postgres NOTIFY trigger wakes it o
 
 | Layer | What | Why |
 |---|---|---|
-| Collector (core) | `lib/track.ts` → `POST /api/t` → `crm_events` in the app's Postgres, `stitchAnon()` at login | Same-domain requests (ad blockers rarely drop them). Rows sit next to orders and messages, so triggers and lift are one SQL join with no sync. No IP stored |
+| Collector (core) | `lib/track.ts` → `POST /api/t` → `crm_events` in the app's Postgres, `stitchAnon()` at login | Same-domain requests (ad blockers rarely drop them). Rows sit next to orders and messages, so triggers and lift are one SQL join with no sync. Device, browser and place are derived on the server; a retried beacon is stored once; the browser can't post server facts like `order.paid`. No IP stored |
 | Revenue (core) | `crm_revenue` = a table or VIEW over the app's own orders/payments | no billing vendor in the loop |
-| Umami (core) | self-hosted on your Railway: `mkt-umami deploy`, then `mkt-umami snippet` | the human dashboard (visitors, referrers, UTMs) without building UI. `umami.identify(contact.id)` links it to the CRM |
+| Dashboard (core) | `analytics.sql` §D over `crm_events`: visitors, visits, views, bounce, duration, pages, sources, devices, places, right now, daily trend — or the app's own admin screen on the same definitions | one store, so the dashboard, funnels, cohorts and campaign lift can never disagree |
 | Search Console (optional) | `mkt-settings gsc on\|off` | search-query data only exists at Google. It's read-only and collects nothing from visitors |
 
-No GA4, PostHog, Segment or Stripe. Self-hosted PostHog needs ClickHouse, Kafka and Redis, which
-is heavy on Railway. Plausible CE is AGPL and also needs ClickHouse. Umami is MIT, runs on
-Postgres and idles at about 200 MB.
+No GA4, PostHog, Segment, Stripe or second analytics database: a separate web-analytics tool
+only duplicates `crm_events` with numbers that drift from it, and can't join to orders,
+messages or holdouts.
 
 ## The loop
 
@@ -162,12 +161,11 @@ recall ─▶ listen ─▶ segment ─▶ shape ─▶ write ─▶ harden ─�
 ledger   crm-db    growth-    market-  copy →   campaign-  lifecycle-   lift vs    ledger
          events +  data SQL   ing      edit →   harden +   engine       holdout
          orders,   (cohorts)  skills   human-   preflight  Resend/      (crm-db)
-         Umami,                        izer     (GREEN)    Telnyx
-         GSC opt.
+         GSC opt.                      izer     (GREEN)    Telnyx
 ```
 
 **One join key:** the campaign `id` is also the `utm_campaign`, the Resend tag `campaign` and
-`crm_campaigns.id`, so the collector, Umami, messages and revenue all group by the same value.
+`crm_campaigns.id`, so the collector, messages and revenue all group by the same value.
 `mkt-preflight` rejects any link that breaks it.
 
 ## `mkt-preflight`: the campaign gate
@@ -209,9 +207,6 @@ curl -fsSL https://raw.githubusercontent.com/feelthefusion/marketing-kit/main/in
 ```
 
 - **Resend on Claude Code:** browser OAuth on first use (hosted MCP from the official plugin).
-- **Umami (once per app):** in the app repo, run `mkt-umami deploy`. It writes `UMAMI_*` into
-  `secrets.env`. Log in, change the default password, add the site, run
-  `mkt-umami snippet <website-id>`, then re-run the installer.
 - **Search Console (optional):** `mkt-settings gsc on`, plus a service-account JSON in
   `GOOGLE_APPLICATION_CREDENTIALS` (see `journey-analytics/references/search-console.md`).
   `mkt-settings gsc off` unregisters it everywhere.
@@ -237,19 +232,20 @@ To use a read-only DB role (recommended), run the SQL in
 skills/            marketing-kit · growth-data · journey-analytics · campaign-harden · lifecycle-engine · playbook-ledger
                    partner-program · loyalty-engine · growth-optimizer · meta-ads · mobile-growth
   growth-data/references/     crm-schema.ts (Drizzle) · cohorts.sql · readonly-role.sql
-  journey-analytics/references/ first-party-tracking.ts · analytics.sql · umami.md · search-console.md
+  journey-analytics/references/ first-party-tracking.ts · analytics.sql · search-console.md
   lifecycle-engine/references/ outbox-worker.ts · webhooks.ts
   partner-program/references/  partner-tracking.ts · partner.sql · payouts.ts · creator-discovery.ts
   loyalty-engine/references/   loyalty.sql · loyalty.ts
   growth-optimizer/            scripts/optimize.py · references/bandit.ts · references/optimizer.sql
   meta-ads/references/         meta-capi.ts
   mobile-growth/references/    app-server.ts · app-client.md (Expo + PWA) · mobile.sql
-bin/               mkt-mcp · mkt-preflight · mkt-ledger · mkt-doctor · mkt-settings · mkt-umami · mkt-update · mkt-webhooks · mkt-optimize
+bin/               mkt-mcp · mkt-preflight · mkt-ledger · mkt-doctor · mkt-settings · mkt-update · mkt-webhooks · mkt-optimize
 install/           bootstrap.sh · install.sh (Claude Code) · hermes.sh · init-project.sh (mkt-init)
                    upstream-skills.tsv ← the curated set (both hosts) · claude-plugins.tsv · hermes-skills.tsv ← vendor packs
 templates/         campaign.example.json · secrets.env.example · marketing-kit.env · banned-phrases.txt
-tests/run.sh       preflight, DB resolution, switches, Umami, mkt-init idempotency, verify gating, ledger,
+tests/run.sh       preflight, DB resolution, switches, mkt-init idempotency, verify gating, ledger,
                    schema typecheck, and every analytics/cohort query on a real seeded Postgres;
+                   the collector end to end (dedupe, server-derived device/place, forged facts refused, §D numbers);
                    outbox worker on every channel (mock Resend/Telnyx/Expo/Web Push), partner/loyalty money paths
                    (mock PayPal), mobile E2E (app links, install claims → creator credit, Apple Ads, AdAttributionKit),
                    brain consistency, bandit, optimizer on synthetic history

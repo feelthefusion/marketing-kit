@@ -61,11 +61,10 @@ export const crmContacts = pgTable("crm_contacts", {
 
 export type Touch = {
   utm_source?: string; utm_medium?: string; utm_campaign?: string; utm_content?: string; utm_term?: string;
-  referrer?: string; landing_page?: string; anon_id?: string; at: string;
+  referrer?: string; referrer_host?: string; landing_page?: string; anon_id?: string; at: string;
 };
 
 // Every other identifier for a contact: pre-signup browser id, Resend/Telnyx ids, legacy ids.
-// (Umami needs no row: the site calls umami.identify(contact.id), so session.distinct_id IS the id.)
 export const crmIdentities = pgTable("crm_identities", {
   contactId: uuid("contact_id").notNull().references(() => crmContacts.id, { onDelete: "cascade" }),
   kind: text("kind").notNull(),   // anon_id | resend_contact | telnyx_number | legacy_user_id

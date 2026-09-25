@@ -81,7 +81,7 @@ print(f"""# Growth stack — {os.path.basename(root)}
 
 ## Analytics (journey-analytics)
 - First-party collector (/api/t → crm_events): ? (journey-analytics → references/first-party-tracking.ts)
-- Umami: website id ? · dashboard url ? (mkt-umami deploy / snippet)
+- Analytics: crm_events is the only store (collector /api/t + server facts) · dashboard: the app's admin analytics screen ? (else journey-analytics → analytics.sql §D)
 - Search Console (optional, mkt-settings gsc on): property ?
 - Revenue source: orders/payments tables above (confirm which rows count as revenue): ?
 

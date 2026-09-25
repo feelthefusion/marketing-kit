@@ -91,11 +91,14 @@ link_upstream_skills() {  # $1 = kit root  $2 = skills dir  $3 = host (claude|he
 link_bins() {  # $1 = kit root
     mkdir -p "$MKT_BIN"
     local b
-    for b in mkt-mcp mkt-ledger mkt-preflight mkt-doctor mkt-settings mkt-umami mkt-update mkt-webhooks mkt-optimize; do
+    for b in mkt-mcp mkt-ledger mkt-preflight mkt-doctor mkt-settings mkt-update mkt-webhooks mkt-optimize; do
         chmod +x "$1/bin/$b"; ln -sfn "$1/bin/$b" "$MKT_BIN/$b"
     done
+    for b in mkt-umami; do   # retired CLIs: drop the stale link (Umami left the stack; crm_events is the only analytics store)
+        [ -L "$MKT_BIN/$b" ] && rm -f "$MKT_BIN/$b" && say "  · $b removed (retired)"
+    done
     chmod +x "$1/install/init-project.sh"; ln -sfn "$1/install/init-project.sh" "$MKT_BIN/mkt-init"
-    ok "mkt-mcp mkt-ledger mkt-preflight mkt-doctor mkt-settings mkt-umami mkt-update mkt-webhooks mkt-optimize mkt-init → $MKT_BIN"
+    ok "mkt-mcp mkt-ledger mkt-preflight mkt-doctor mkt-settings mkt-update mkt-webhooks mkt-optimize mkt-init → $MKT_BIN"
     case ":$PATH:" in *":$MKT_BIN:"*) ;; *) warn "$MKT_BIN is not on PATH — add: export PATH=\"\$HOME/.local/bin:\$PATH\"" ;; esac
 }
 
