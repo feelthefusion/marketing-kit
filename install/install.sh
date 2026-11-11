@@ -2,7 +2,7 @@
 # =============================================================================
 # Marketing Kit — CLAUDE CODE installer.   bash install/install.sh   (re-run = update)
 #
-#   1 Playbook ledger   Supermemory local server (reused if present) + plugin + mkt-ledger
+#   1 Playbook ledger   mkt-ledger (memory via claude-mem / Claude native memory)
 #   2 Growth data       railway MCP here · crm-db MCP per repo via mkt-init (postgres-mcp@latest)
 #   3 Journey analytics first-party tracking (your site → your Postgres) · optional: gsc (mkt-settings)
 #   4 Marketing skills  coreyhaines31/marketingskills plugin
@@ -32,30 +32,7 @@ say "▶ kit CLIs"
 link_bins "$KIT_ROOT"
 ensure_secrets_file "$KIT_ROOT"
 
-ensure_supermemory_server
-# Plugin → LOCAL server. Desktop apps never read ~/.zshrc; settings.json `env` reaches hooks + MCP.
-if [ -s "$HOME/.supermemory/api-key" ]; then
-    python3 - "$SETTINGS" "$HOME/.supermemory/api-key" <<'PY'
-import json, os, sys
-p, keyf = sys.argv[1:3]
-d = json.load(open(p)) if os.path.exists(p) else {}
-env = d.setdefault("env", {})
-env.setdefault("SUPERMEMORY_API_URL", "http://localhost:6767")
-env["SUPERMEMORY_CC_API_KEY"] = open(keyf).read().strip()
-os.makedirs(os.path.dirname(p), exist_ok=True)
-json.dump(d, open(p, "w"), indent=2); open(p, "a").write("\n")
-print("  · settings.json env → Supermemory local server ✓")
-PY
-    chmod 600 "$SETTINGS"
-    SMC="$HOME/.supermemory-claude/settings.json"; mkdir -p "$(dirname "$SMC")"
-    python3 - "$SMC" <<'PY'
-import json, os, sys
-p = sys.argv[1]; d = json.load(open(p)) if os.path.exists(p) else {}
-d["signalExtraction"] = True
-json.dump(d, open(p, "w"), indent=2); open(p, "a").write("\n")
-print("  · supermemory plugin: signal-only capture ✓")
-PY
-fi
+# (supermemory removed — memory via claude-mem / Claude native memory)
 
 # --- curated upstream skills: live checkouts (linked per repo by mkt-init) ------------
 say "▶ curated upstream skills (install/upstream-skills.tsv — one list for Claude Code + Hermes)"

@@ -39,7 +39,7 @@ mkt-doctor      # every gap on this machine and in this repo, with the fix comma
 | Vendor packs | Resend, Telnyx (SMS + WhatsApp), Hyperframes, Humanizer. Claude Code: **plugins from each vendor's own marketplace**, updated every run. Hermes: **hub installs from the vendor repo** |
 | Context budget | Marketing skills load **per repo** (`mkt-init` links them into `.claude/skills`, git-excluded), so coding-only sessions don't pay for them |
 | MCP servers | `mkt-mcp <name>` runs `npx pkg@latest` / `uvx pkg@latest` on every launch |
-| Supermemory | the official installer; an existing server (e.g. from Starter Kit) gets reused |
+| the host memory system | the official installer; an existing server (e.g. from Starter Kit) gets reused |
 
 This repo contains no vendored third-party skill.
 
@@ -115,7 +115,7 @@ MKT_UPDATE=off                 # disable
 
 | # | Component | Source | Role |
 |---|-----------|--------|------|
-| 1 | **playbook-ledger** + Supermemory | local server `:6767` · `mkt-ledger` | ICPs, voice, offers, campaign lift, seasonal plays. Recalled first, saved last. Shared by both hosts |
+| 1 | **playbook-ledger** + the host memory system | local server `:6767` · `mkt-ledger` | ICPs, voice, offers, campaign lift, seasonal plays. Recalled first, saved last. Shared by both hosts |
 | 2 | **growth-data** + `crm-db` + `railway` MCP | [crystaldba/postgres-mcp](https://github.com/crystaldba/postgres-mcp) · Railway CLI `railway mcp` | CRM schema (Drizzle reference), identity stitching, cohort SQL. Resolves **the current repo's** DB. Read-only by default |
 | 3 | **journey-analytics** + first-party collector + §D dashboard · optional `gsc` | this kit (collector: `/api/t` → `crm_events`, the only analytics store) · [AminForou/mcp-gsc](https://github.com/AminForou/mcp-gsc) behind a switch | traffic → behavior → revenue from your own data, one join key, holdout-based lift |
 | 4 | Curated strategy skills (73) | `install/upstream-skills.tsv`: marketingskills, appeeky ASO, rorkai App Store Connect, brand, last30days | strategy + drafts for every discipline (see *One marketing brain*) |
@@ -210,7 +210,7 @@ curl -fsSL https://raw.githubusercontent.com/feelthefusion/marketing-kit/main/in
 - **Search Console (optional):** `mkt-settings gsc on`, plus a service-account JSON in
   `GOOGLE_APPLICATION_CREDENTIALS` (see `journey-analytics/references/search-console.md`).
   `mkt-settings gsc off` unregisters it everywhere.
-- **Supermemory extraction** needs an LLM key in `~/.supermemory/env`; search works without one.
+- **the host memory system extraction** needs an LLM key in `~/.supermemory/env`; search works without one.
 
 **Once per repo:**
 

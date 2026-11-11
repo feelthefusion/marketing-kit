@@ -133,67 +133,11 @@ ensure_runtime() {
     command -v psql >/dev/null 2>&1 && ok "psql present (mkt-preflight --db)" || warn "psql missing — mkt-preflight --db skips the live column check (brew install libpq / apt install postgresql-client)"
 }
 
-# Supermemory LOCAL server: reuse when present (Skill Starter Kit installs it), install when not.
+# Supermemory removed (v1.2): memory is handled by claude-mem (Claude Code) and
+# Hermes built-in. The playbook ledger reads/writes plain files; no external server.
 ensure_supermemory_server() {
-    say "▶ Supermemory (playbook ledger)"
-    if curl -s -o /dev/null --max-time 3 http://localhost:6767/ 2>/dev/null; then
-        ok "local server answering on :6767 (already installed — wiring only)"
-    else
-        if [ ! -x "$HOME/.local/bin/supermemory-server" ]; then
-            say "  · installing supermemory-server (official installer)"
-            # The installer prompts on /dev/tty for an LLM key; headless shells (CI, containers) can't
-            # open it, so skip the prompt there — search works without a key, extraction needs one.
-            local np=""; ( : </dev/tty ) 2>/dev/null || np=1
-            curl -fsSL https://supermemory.ai/install | SUPERMEMORY_NO_PROMPT="${np:-${SUPERMEMORY_NO_PROMPT:-}}" bash >/dev/null 2>&1 \
-                && ok "supermemory-server installed" \
-                || { warn "Supermemory install failed — see https://supermemory.ai/install"; return 0; }
-        fi
-        if [ "$(uname -s)" = Darwin ]; then
-            local agent="$HOME/Library/LaunchAgents/com.supermemory.local.plist"
-            if [ ! -f "$agent" ]; then
-                mkdir -p "$(dirname "$agent")" "$HOME/.supermemory"
-                cat > "$agent" <<EOF
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0"><dict>
-    <key>Label</key><string>com.supermemory.local</string>
-    <key>ProgramArguments</key><array><string>$HOME/.local/bin/supermemory-server</string></array>
-    <key>RunAtLoad</key><true/><key>KeepAlive</key><true/>
-    <key>WorkingDirectory</key><string>$HOME</string>
-    <key>StandardOutPath</key><string>$HOME/.supermemory/launchd.out.log</string>
-    <key>StandardErrorPath</key><string>$HOME/.supermemory/launchd.err.log</string>
-</dict></plist>
-EOF
-            fi
-            launchctl bootstrap "gui/$(id -u)" "$agent" 2>/dev/null || launchctl kickstart -k "gui/$(id -u)/com.supermemory.local" 2>/dev/null || true
-            ok "launchd agent com.supermemory.local (auto-start at login)"
-        elif command -v systemctl >/dev/null 2>&1 && systemctl --user show-environment >/dev/null 2>&1; then
-            local unit="$HOME/.config/systemd/user/supermemory.service"
-            mkdir -p "$(dirname "$unit")"
-            printf '[Unit]\nDescription=Supermemory local server\n[Service]\nExecStart=%s\nWorkingDirectory=%s\nRestart=always\n[Install]\nWantedBy=default.target\n' \
-                "$HOME/.local/bin/supermemory-server" "$HOME" > "$unit"
-            systemctl --user daemon-reload && systemctl --user enable --now supermemory.service >/dev/null 2>&1 \
-                && ok "systemd --user unit supermemory.service (auto-start at login)" || warn "systemd unit failed — systemctl --user status supermemory"
-        else
-            mkdir -p "$HOME/.supermemory"
-            # data dir is ./.supermemory relative to the CWD — always launch from $HOME
-            ( cd "$HOME" && nohup "$HOME/.local/bin/supermemory-server" >"$HOME/.supermemory/server.log" 2>&1 & )
-            ok "supermemory-server started in background (no systemd user session — re-run the installer after reboot)"
-        fi
-        up=0; for _ in $(seq 1 60); do   # first boot: port answers a moment before the api key is persisted
-            curl -s -o /dev/null --max-time 2 http://localhost:6767/ && up=1 && [ -s "$HOME/.supermemory/api-key" ] && break; sleep 1; done
-        if [ "$up" = 0 ]; then
-            warn "supermemory-server did not start — it requires an LLM key. Fix (either):"
-            warn "   export ANTHROPIC_API_KEY=… (or OPENAI_/GEMINI_) and re-run this installer"
-            warn "   or run  supermemory-server  once in a terminal and paste a key when asked"
-            return 0
-        fi
-    fi
-    [ -s "$HOME/.supermemory/api-key" ] && ok "api key at ~/.supermemory/api-key" \
-        || warn "no api key yet — run supermemory-server once in a terminal (first boot mints it), then re-run"
-    # provider key: plain env file, or the encrypted env.enc the official installer writes
-    { [ -s "$HOME/.supermemory/env" ] || [ -s "$HOME/.supermemory/env.enc" ]; } \
-        || warn "no LLM provider for Supermemory — memory EXTRACTION needs OPENAI_/ANTHROPIC_/GEMINI_API_KEY in ~/.supermemory/env; search works without it"
+    # no-op: supermemory was removed from the kit
+    return 0
 }
 
 write_marked_block() {  # write_marked_block <file> <marker> <content-file>

@@ -6,7 +6,6 @@
 # Strategy skills are NOT plugins: they come from the curated list install/upstream-skills.tsv.
 # plugin@marketplace	marketplace repo	scope	kit component
 humanizer@humanizer	blader/humanizer	user	5 de-slop [~90 tok]
-supermemory@supermemory-plugins	supermemoryai/claude-supermemory	user	1 memory hooks (local server)
 resend@resend-skills	resend/resend-skills	project	7 email skills + hosted MCP (OAuth) [~0.6k tok]
 telnyx-messaging@telnyx	team-telnyx/ai	project	7 SMS skills [~0.9k tok]
 telnyx-whatsapp@telnyx	team-telnyx/ai	project	7 WhatsApp via Telnyx (same account as SMS)

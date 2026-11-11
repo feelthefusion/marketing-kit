@@ -1,11 +1,11 @@
 ---
 name: playbook-ledger
-description: "Use at the START of any marketing/growth task to recall prior ICPs, personas, voice rules, offers, campaign results and seasonal plays, and at the END to save what was learned — via mkt-ledger on the local Supermemory server (container 'growth'). Defines what to save, the record format, and when a memory is stale."
+description: "Use at the START of any marketing/growth task to recall prior ICPs, personas, voice rules, offers, campaign results and seasonal plays, and at the END to save what was learned — via mkt-ledger using the host memory system (claude-mem / Claude native memory). Defines what to save, the record format, and when a memory is stale."
 ---
 
-# Playbook Ledger (Supermemory)
+# Playbook Ledger
 
-Growth compounds only if results are remembered. The ledger is the Supermemory container
+Growth compounds only if results are remembered. The ledger is the host memory container
 `growth` on the local server (`localhost:6767`), shared by Claude Code and Hermes through one
 CLI:
 
@@ -15,7 +15,7 @@ mkt-ledger save lift "winback-10d-inactive: +6.1pt 7d return vs 10% holdout (n=4
 mkt-ledger doctor
 ```
 
-The host's own Supermemory integration (Claude Code plugin hooks / Hermes memory provider)
+The host's own memory integration (claude-mem plugin hooks on Claude Code; Hermes built-in memory)
 still captures conversation context automatically; `mkt-ledger` is for **deliberate,
 structured** growth facts that must survive and be findable by kind.
 

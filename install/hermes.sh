@@ -8,7 +8,7 @@
 #   humanizer       Hermes' bundled port of blader/humanizer (not installed twice)
 #   MCP servers     mcp_servers.* via `hermes config set` — stdio through mkt-mcp (@latest),
 #                   Resend via resend-mcp@latest · optional gsc via mkt-settings
-#   ledger          memory.provider = supermemory (local) + mkt-ledger
+#   ledger          mkt-ledger (memory via Hermes built-in / claude-mem)
 # =============================================================================
 set -euo pipefail
 SELF="${BASH_SOURCE[0]}"; while [ -L "$SELF" ]; do SELF="$(readlink "$SELF")"; done
@@ -34,18 +34,7 @@ say "▶ kit CLIs"
 link_bins "$KIT_ROOT"
 ensure_secrets_file "$KIT_ROOT"
 
-ensure_supermemory_server
-if [ "$HAVE_HERMES" = 1 ] && [ -s "$HOME/.supermemory/api-key" ]; then
-    HPY="$(dirname "$(readlink -f "$(command -v hermes)")")/python"
-    if [ -x "$HPY" ] && ! "$HPY" -c 'import supermemory' >/dev/null 2>&1; then
-        "$HPY" -m pip install -q supermemory >/dev/null 2>&1 || uv pip install -q --python "$HPY" supermemory >/dev/null 2>&1 || warn "could not install the supermemory SDK into Hermes' venv"
-    fi
-    [ -f "$HH/supermemory.json" ] || printf '{\n  "base_url": "http://localhost:6767"\n}\n' > "$HH/supermemory.json"
-    touch "$HH/.env"; chmod 600 "$HH/.env"
-    grep -q '^SUPERMEMORY_API_KEY=' "$HH/.env" || printf 'SUPERMEMORY_API_KEY=%s\n' "$(cat "$HOME/.supermemory/api-key")" >> "$HH/.env"
-    [ "$(hermes config get memory.provider 2>/dev/null)" = supermemory ] || hermes config set memory.provider supermemory >/dev/null 2>&1
-    ok "memory.provider = supermemory (local)"
-fi
+# (supermemory removed — Hermes keeps its built-in memory provider)
 
 say "▶ vendor skills (Hermes skills hub — installed from the vendor repo, updated every run)"
 if [ "$HAVE_HERMES" = 1 ]; then

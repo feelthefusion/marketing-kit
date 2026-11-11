@@ -50,7 +50,7 @@ context files > a skill's generic advice.** Update the context file when a resul
 | Sales + outbound | `prospecting`, `cold-email`, `sales-enablement` | `growth-data` (prospect rows) + `lifecycle-engine` (sequences) + `growth-optimizer` (`prospect_fit`) | `journey-analytics` |
 | Recurring growth loops | `marketing-loops` (loop design) | the owner of the loop's channel, **triggered by events** | `growth-optimizer` |
 | Quality gate | — | **`campaign-harden`** + `mkt-preflight` | — |
-| Memory | — | **`playbook-ledger`** (Supermemory) | — |
+| Memory | — | **`playbook-ledger`** (host memory: claude-mem / native) | — |
 
 **One writer per table and channel.**
 - `growth-data`: schema and migrations.
