@@ -140,6 +140,9 @@ grep -q "mkt-preflight example GREEN" "$T/init.log" && ok "example campaign GREE
 cp "$R/CLAUDE.md" "$T/c1"; cp "$R/verify.sh" "$T/v1"
 (cd "$R" && PATH="$KIT/bin:$PATH" bash "$KIT/install/init-project.sh" >/dev/null 2>&1)
 cmp -s "$R/CLAUDE.md" "$T/c1" && cmp -s "$R/verify.sh" "$T/v1" && ok "re-run is idempotent (no duplicate blocks)" || bad "re-run changed files"
+printf '\n-- adapted to this repo\n' >> "$R/campaigns/examples/winback-10d-inactive.sql"; cp "$R/campaigns/examples/winback-10d-inactive.sql" "$T/ex1"
+(cd "$R" && PATH="$KIT/bin:$PATH" bash "$KIT/install/init-project.sh" >/dev/null 2>&1)
+cmp -s "$R/campaigns/examples/winback-10d-inactive.sql" "$T/ex1" && ok "re-run keeps a repo's adapted example campaign" || bad "re-run overwrote the repo's adapted example campaign"
 cp "$T/unknown-var.json" "$R/campaigns/bad.campaign.json"
 (cd "$R" && PATH="$KIT/bin:$PATH" ./verify.sh >/dev/null 2>&1); [ $? != 0 ] && ok "verify.sh goes RED on a broken campaign" || bad "verify.sh did not block the broken campaign"
 rm "$R/campaigns/bad.campaign.json"
