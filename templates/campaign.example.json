@@ -37,7 +37,8 @@
   "send": {
     "mode": "triggered",
     "trigger": "cohort: inactive_10d (evaluated daily 15:00 local)",
-    "idempotency_key": "{{campaign.id}}/{{contact_id}}"
+    "idempotency_key": "{{campaign.id}}/{{contact_id}}",
+    "exclude": ["hard_bounce", "carrier_reject", "complaint", "opted_out", "unsubscribed", "manual"]
   },
   "channels": [
     {
