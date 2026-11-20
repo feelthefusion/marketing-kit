@@ -119,8 +119,10 @@ fi
 [ -f .agents/marketing-kit.env ] || { cp "$KIT_ROOT/templates/marketing-kit.env" .agents/marketing-kit.env; echo "  · .agents/marketing-kit.env created (MKT_DB_ACCESS=restricted) ✓"; }
 chmod 600 .agents/marketing-kit.env
 [ -f .agents/banned-phrases.txt ] || printf '# Brand-specific phrases mkt-preflight should flag (one per line). Kit list: %s/templates/banned-phrases.txt\n' "$KIT_ROOT" > .agents/banned-phrases.txt
-cp "$KIT_ROOT/templates/campaign.example.json" campaigns/examples/winback-10d-inactive.campaign.json
-cp "$KIT_ROOT/templates/winback-10d-inactive.sql" campaigns/examples/winback-10d-inactive.sql
+# Written once. A repo adapts the example to its own schema (its suppression view, its columns), and
+# mkt-update re-runs this script whenever the kit moves, so overwriting it here reverted that work.
+[ -f campaigns/examples/winback-10d-inactive.campaign.json ] || cp "$KIT_ROOT/templates/campaign.example.json" campaigns/examples/winback-10d-inactive.campaign.json
+[ -f campaigns/examples/winback-10d-inactive.sql ] || cp "$KIT_ROOT/templates/winback-10d-inactive.sql" campaigns/examples/winback-10d-inactive.sql
 [ -f campaigns/README.md ] || cat > campaigns/README.md <<'MD'
 # Campaigns
 One `<id>.campaign.json` + `<id>.sql` per campaign. `id` is the utm_campaign, the Resend tag and
